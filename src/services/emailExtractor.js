@@ -4,11 +4,9 @@
  */
 
 import * as microsoftGraphService from './microsoftGraphService.js';
-import * as claudeService from './claudeService.js';
 import * as emailFilter from './emailFilter.js';
 import * as db from '../config/db.js';
-import geminiService from './geminiService.js';
-import chatgptService from './chatgptService.js';
+import { getAIService, getProviderInfo } from './aiServiceFactory.js';
 
 class EmailExtractorService {
   /**
@@ -22,11 +20,19 @@ class EmailExtractorService {
       maxEmails = 100,
       startDate = null,
       scoreThreshold = 30,
-      previewMode = false
+      previewMode = false,
+      aiProvider = null // Optional: override AI provider
     } = options;
+
+    // Get configured AI service
+    const aiService = getAIService(aiProvider);
+    const providerInfo = getProviderInfo();
 
     console.log('\n' + '='.repeat(60));
     console.log('SMART EMAIL EXTRACTION WITH PRE-FILTERING');
+    console.log('='.repeat(60));
+    console.log(`AI Provider: ${providerInfo.current.toUpperCase()}`);
+    console.log(`Model: ${providerInfo.models[providerInfo.current]}`);
     console.log('='.repeat(60) + '\n');
 
     const results = {
@@ -85,7 +91,7 @@ class EmailExtractorService {
 
       // Process filtered emails
       console.log(`\n${'='.repeat(60)}`);
-      console.log('STEP 2: PROCESSING FILTERED EMAILS WITH CLAUDE AI');
+      console.log(`STEP 2: PROCESSING FILTERED EMAILS WITH ${providerInfo.current.toUpperCase()} AI`);
       console.log(`${'='.repeat(60)}\n`);
 
       for (let i = 0; i < toProcess.length; i++) {
@@ -104,17 +110,15 @@ class EmailExtractorService {
             continue;
           }
 
-          // Parse with Gemini
-          //const models = await geminiService.listAvailableModels();
-         // console.log(`  Using Gemini model: ${models[0]}`);
-          const parsedData = await chatgptService.parseEmailWithChatGPT(email);
+          // Parse with configured AI service
+          const parsedData = await aiService.parseEmail(email);
 
           if (!parsedData) {
             results.processed.failed++;
             results.errors.push({
               emailId: email.id,
               subject: email.subject,
-              error: 'Failed to parse with Gemini'
+              error: `Failed to parse with ${providerInfo.current}`
             });
             continue;
           }
@@ -172,11 +176,19 @@ class EmailExtractorService {
     const {
       searchQuery = 'quote OR shipping OR freight OR cargo',
       maxEmails = 100,
-      startDate = null
+      startDate = null,
+      aiProvider = null // Optional: override AI provider
     } = options;
+
+    // Get configured AI service
+    const aiService = getAIService(aiProvider);
+    const providerInfo = getProviderInfo();
 
     console.log('\n' + '='.repeat(60));
     console.log('SHIPPING QUOTE EMAIL EXTRACTION');
+    console.log('='.repeat(60));
+    console.log(`AI Provider: ${providerInfo.current.toUpperCase()}`);
+    console.log(`Model: ${providerInfo.models[providerInfo.current]}`);
     console.log('='.repeat(60) + '\n');
 
     const results = {
@@ -220,15 +232,15 @@ class EmailExtractorService {
             continue;
           }
 
-          // Parse with Claude
-          const parsedData = await claudeService.parseEmailWithClaude(email);
+          // Parse with configured AI service
+          const parsedData = await aiService.parseEmail(email);
 
           if (!parsedData) {
             results.processed.failed++;
             results.errors.push({
               emailId: email.id,
               subject: email.subject,
-              error: 'Failed to parse with Claude'
+              error: `Failed to parse with ${providerInfo.current}`
             });
             continue;
           }
@@ -240,7 +252,7 @@ class EmailExtractorService {
 
           // Delay to avoid rate limiting
           if (i < emails.length - 1) {
-            await sleep(8000);
+            await this.sleep(8000);
           }
 
         } catch (error) {
