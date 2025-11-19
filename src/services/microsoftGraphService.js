@@ -74,7 +74,7 @@ class MicrosoftGraphService {
     const params = {
       '$search': `"${searchQuery}"`,
       '$top': top,
-      '$select': 'id,subject,from,receivedDateTime,bodyPreview,body,hasAttachments',
+      '$select': 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
       '?$orderby': 'receivedDateTime DESC'
     };
 

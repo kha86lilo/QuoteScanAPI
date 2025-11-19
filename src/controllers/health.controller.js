@@ -5,8 +5,8 @@
 
 import * as db from '../config/db.js';
 import * as microsoftGraphService from '../services/microsoftGraphService.js';
-import * as claudeService from '../services/claudeService.js';
-import * as geminiService from '../services/geminiService.js';
+import * as claudeService from '../services/ai/claudeService.js';
+import * as geminiService from '../services/ai/geminiService.js';
 import * as emailExtractor from '../services/emailExtractor.js';
 
 /**

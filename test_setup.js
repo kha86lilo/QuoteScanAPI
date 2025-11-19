@@ -5,7 +5,7 @@
 
 import * as db from './src/config/db.js';
 import microsoftGraphService from './src/services/microsoftGraphService.js';
-import claudeService from './src/services/claudeService.js';
+import claudeService from './src/services/ai/claudeService.js';
 
 async function runTests() {
   console.log('\n' + '='.repeat(60));

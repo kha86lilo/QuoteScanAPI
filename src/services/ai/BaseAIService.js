@@ -33,7 +33,7 @@ export default class BaseAIService {
     const senderName = email.from?.emailAddress?.name || '';
     const senderAddress = email.from?.emailAddress?.address || '';
     const receivedDate = email.receivedDateTime || '';
-    let bodyContent = email.body?.content || '';
+    let bodyContent = email.bodyPreview  || '';
 
     const MAX_BODY_CHARS = process.env.MAX_BODY_CHARS || 800000;
     if (bodyContent.length > MAX_BODY_CHARS) {
