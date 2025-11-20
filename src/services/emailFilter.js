@@ -1,6 +1,6 @@
 /**
  * Email Filter Service
- * Pre-filters emails to identify likely quote requests before expensive Claude API processing
+ * Pre-filters emails to identify likely quote requests before expensive API processing
  */
 
 class EmailFilter {
@@ -127,9 +127,8 @@ class EmailFilter {
       reasons.push('Has attachments');
     }
 
-    // 9. Warn about very long emails (might be email chains)
-    const bodyContent = email.body?.content || '';
-    if (bodyContent.length > 500000) {
+    // 9. Warn about very long emails (might be email chains) 
+    if (email.bodyPreview.length > 5000) {
       score -= 10;
       reasons.push('Very long email (likely chain)');
     }
@@ -183,13 +182,15 @@ class EmailFilter {
       }
     }
 
+    const requestPrice = parseFloat(process.env.REQUEST_PRICE) || 0.015;
+    
     const summary = {
       total: emails.length,
       toProcess: toProcess.length,
       toSkip: toSkip.length,
       processPercentage: emails.length > 0 ? ((toProcess.length / emails.length) * 100).toFixed(1) : 0,
-      estimatedCost: toProcess.length * 0.015,
-      estimatedSavings: toSkip.length * 0.015
+      estimatedCost: toProcess.length * requestPrice,
+      estimatedSavings: toSkip.length * requestPrice
     };
 
     return { toProcess, toSkip, summary };

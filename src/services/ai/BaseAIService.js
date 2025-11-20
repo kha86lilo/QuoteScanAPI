@@ -17,31 +17,33 @@ export default class BaseAIService {
    * Parse email with AI to extract shipping quote data
    * @param {Object} email - Raw email data from Microsoft Graph
    * @param {number} maxRetries - Number of retry attempts for rate limits
+   * @param {string} attachmentText - Optional extracted text from attachments
    * @returns {Promise<Object|null>} Parsed quote data
    */
-  async parseEmail(email, maxRetries = 3) {
+  async parseEmail(email, maxRetries = 3, attachmentText = '') {
     throw new Error('parseEmail() must be implemented by child class');
   }
 
   /**
    * Prepare email content for AI parsing
    * @param {Object} email - Raw email data from Microsoft Graph
+   * @param {string} attachmentText - Optional extracted text from attachments
    * @returns {string} Formatted email content
    */
-  prepareEmailContent(email) {
+  prepareEmailContent(email, attachmentText = '') {
     const subject = email.subject || '';
     const senderName = email.from?.emailAddress?.name || '';
     const senderAddress = email.from?.emailAddress?.address || '';
     const receivedDate = email.receivedDateTime || '';
     let bodyContent = email.bodyPreview  || '';
 
-    const MAX_BODY_CHARS = process.env.MAX_BODY_CHARS || 800000;
+    const MAX_BODY_CHARS = process.env.MAX_BODY_CHARS || 15000;
     if (bodyContent.length > MAX_BODY_CHARS) {
       console.log(`  ⚠ Email body very long (${bodyContent.length} chars), truncating...`);
       bodyContent = bodyContent.substring(0, MAX_BODY_CHARS) + "\n\n[... Email truncated due to length ...]";
     }
 
-    return `
+    let content = `
 Subject: ${subject}
 From: ${senderName} <${senderAddress}>
 Date: ${receivedDate}
@@ -49,6 +51,13 @@ Date: ${receivedDate}
 Body:
 ${bodyContent}
 `;
+
+    // Add attachment text if available
+    if (attachmentText && attachmentText.trim()) {
+      content += `\n\n========================================\nATTACHMENT CONTENT:\n========================================\n${attachmentText}`;
+    }
+
+    return content;
   }
 
   /**

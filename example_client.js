@@ -62,12 +62,12 @@ async function previewEmails() {
 }
 
 /**
- * Example 3: Process Emails with Smart Filtering
+ * Example 3: Process Emails with Filtering
  */
-async function processEmailsSmart() {
-  console.log('\n=== Example 3: Process Emails with Smart Filtering ===');
+async function processEmails() {
+  console.log('\n=== Example 3: Process Emails with Filtering ===');
   try {
-    const response = await api.post('/emails/process-smart', {
+    const response = await api.post('/emails/process', {
       searchQuery: 'quote OR shipping',
       maxEmails: 5,  // Start small for testing
       scoreThreshold: 30,
@@ -251,7 +251,7 @@ async function main() {
     
     // Uncomment to actually fetch and process emails:
     // await fetchRawEmails();
-    // await processEmailsSmart();
+    // await processEmails();
 
   } catch (error) {
     console.error('\nFatal error:', error.message);
@@ -271,7 +271,7 @@ module.exports = {
   api,
   checkHealth,
   previewEmails,
-  processEmailsSmart,
+  processEmails,
   getStats,
   getRecentQuotes,
   searchQuotes,

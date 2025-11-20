@@ -21,10 +21,11 @@ class ClaudeService extends BaseAIService {
    * Parse email with Claude AI to extract shipping quote data
    * @param {Object} email - Raw email data from Microsoft Graph
    * @param {number} maxRetries - Number of retry attempts for rate limits
+   * @param {string} attachmentText - Optional extracted text from attachments
    * @returns {Promise<Object|null>} Parsed quote data
    */
-  async parseEmail(email, maxRetries = 3) {
-    const emailContent = this.prepareEmailContent(email);
+  async parseEmail(email, maxRetries = 3, attachmentText = '') {
+    const emailContent = this.prepareEmailContent(email, attachmentText);
     const prompt = this.getExtractionPrompt(emailContent);
 
     return await this.withRetry(async () => {
@@ -50,8 +51,8 @@ class ClaudeService extends BaseAIService {
   /**
    * Legacy method name for backward compatibility
    */
-  async parseEmailWithClaude(email, maxRetries = 3) {
-    return this.parseEmail(email, maxRetries);
+  async parseEmailWithClaude(email, maxRetries = 3, attachmentText = '') {
+    return this.parseEmail(email, maxRetries, attachmentText);
   }
 
   /**

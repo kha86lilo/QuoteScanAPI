@@ -111,7 +111,7 @@
 			"name": "Email Processing",
 			"item": [
 				{
-					"name": "Process Emails - Smart Filtering",
+					"name": "Process Emails - Filtering",
 					"request": {
 						"method": "POST",
 						"header": [
@@ -125,35 +125,6 @@
 							"raw": "{\n  \"searchQuery\": \"quote OR shipping OR freight OR cargo\",\n  \"maxEmails\": 10,\n  \"startDate\": null,\n  \"scoreThreshold\": 30,\n  \"previewMode\": false\n}"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/api/emails/process-smart",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"emails",
-								"process-smart"
-							]
-						},
-						"description": "Process emails with smart pre-filtering to reduce Claude API costs"
-					},
-					"response": []
-				},
-				{
-					"name": "Process Emails - No Filtering",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"searchQuery\": \"quote OR shipping\",\n  \"maxEmails\": 5,\n  \"startDate\": null\n}"
-						},
-						"url": {
 							"raw": "{{baseUrl}}/api/emails/process",
 							"host": [
 								"{{baseUrl}}"
@@ -164,10 +135,10 @@
 								"process"
 							]
 						},
-						"description": "Process emails without pre-filtering (processes all fetched emails)"
+						"description": "Process emails with  pre-filtering to reduce Claude API costs"
 					},
 					"response": []
-				},
+				}, 
 				{
 					"name": "Preview Emails (No Processing)",
 					"request": {

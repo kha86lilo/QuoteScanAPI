@@ -8,9 +8,9 @@ import * as microsoftGraphService from '../services/microsoftGraphService.js';
 import * as claudeService from '../services/ai/claudeService.js';
 
 /**
- * Process emails with smart filtering
+ * Process emails with filtering
  */
-export const processEmailsSmart = async (req, res) => {
+export const processEmails= async (req, res) => {
   try {
     const {
       searchQuery = 'quote OR shipping OR freight OR cargo',
@@ -20,7 +20,7 @@ export const processEmailsSmart = async (req, res) => {
       previewMode = false
     } = req.body;
 
-    const results = await emailExtractor.processEmailsSmart({
+    const results = await emailExtractor.processEmails({
       searchQuery,
       maxEmails,
       startDate,
@@ -39,37 +39,7 @@ export const processEmailsSmart = async (req, res) => {
       error: error.message
     });
   }
-};
-
-/**
- * Process emails without filtering
- */
-export const processEmails = async (req, res) => {
-  try {
-    const {
-      searchQuery = 'quote OR shipping OR freight OR cargo',
-      maxEmails = 50,
-      startDate = null
-    } = req.body;
-
-    const results = await emailExtractor.processEmails({
-      searchQuery,
-      maxEmails,
-      startDate
-    });
-
-    res.json({
-      success: true,
-      results
-    });
-  } catch (error) {
-    console.error('Error processing emails:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-};
+}; 
 
 /**
  * Preview emails that would be processed

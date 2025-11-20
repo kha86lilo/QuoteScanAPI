@@ -34,7 +34,7 @@ app.get('/', (req, res) => {
     description: 'Express.js API for extracting shipping quotes from Microsoft 365 emails using Claude AI',
     endpoints: {
       health: 'GET /api/health',
-      processEmailsSmart: 'POST /api/emails/process-smart',
+      processEmails: 'POST /api/emails/process',
       processEmails: 'POST /api/emails/process',
       previewEmails: 'POST /api/emails/preview',
       fetchEmails: 'POST /api/emails/fetch',
@@ -83,8 +83,7 @@ app.listen(PORT, () => {
   console.log('Available endpoints:');
   console.log('  GET  /                              - API information');
   console.log('  GET  /api/health                    - Health check');
-  console.log('  POST /api/emails/process-smart      - Process emails with smart filtering');
-  console.log('  POST /api/emails/process            - Process emails without filtering');
+  console.log('  POST /api/emails/process            - Process emails with filtering'); 
   console.log('  POST /api/emails/preview            - Preview emails to be processed');
   console.log('  POST /api/emails/fetch              - Fetch emails from Microsoft 365');
   console.log('  POST /api/emails/parse              - Parse a single email with Claude');
@@ -97,6 +96,7 @@ app.listen(PORT, () => {
   console.log('  GET  /api/test/claude               - Test Claude API connection');
   console.log('  GET  /api/test/database             - Test database connection');
   console.log('  GET  /api/test/gemini               - Test Gemini API connection');
+  console.log('  GET  /api/emails/process            - Process emails without filtering');
   console.log('\n' + '='.repeat(60) + '\n');
 });
 

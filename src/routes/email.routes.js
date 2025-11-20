@@ -6,13 +6,7 @@
 import express from 'express';
 import * as emailController from '../controllers/email.controller.js';
 
-const router = express.Router();
-
-/**
- * Process emails with smart filtering
- * POST /api/emails/process-smart
- */
-router.post('/process-smart', emailController.processEmailsSmart);
+const router = express.Router(); 
 
 /**
  * Process emails without filtering
