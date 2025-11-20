@@ -24,28 +24,28 @@ const pool = new Pool({
   password: process.env.SUPABASE_DB_PASSWORD,
   port: parseInt(process.env.SUPABASE_DB_PORT || '5432'),
   ssl: {
-    rejectUnauthorized: false
-  }
+    rejectUnauthorized: false,
+  },
 });
 
 async function runMigration() {
   const client = await pool.connect();
-  
+
   try {
     console.log('🔄 Running migration: Add summary column to processing_jobs table...');
-    
+
     // Read migration file
     const migrationSQL = readFileSync(
-      join(__dirname, 'alter_processing_jobs_add_summary.sql'), 
+      join(__dirname, 'alter_processing_jobs_add_summary.sql'),
       'utf8'
     );
-    
+
     // Execute migration
     await client.query(migrationSQL);
-    
+
     console.log('✅ Migration completed successfully!');
     console.log('\nVerifying column was added...');
-    
+
     // Verify column exists
     const result = await client.query(`
       SELECT column_name, data_type 
@@ -53,7 +53,7 @@ async function runMigration() {
       WHERE table_name = 'processing_jobs' 
       AND column_name = 'summary'
     `);
-    
+
     if (result.rows.length > 0) {
       console.log('✅ Summary column verified:');
       console.log(`   Column: ${result.rows[0].column_name}`);
@@ -61,9 +61,8 @@ async function runMigration() {
     } else {
       console.log('⚠️  Warning: Could not verify summary column');
     }
-    
+
     console.log('\n✅ Migration complete! You can now restart your application.');
-    
   } catch (error) {
     console.error('❌ Migration failed:', error.message);
     console.error('\nDetails:', error);
@@ -75,7 +74,7 @@ async function runMigration() {
 }
 
 // Run migration
-runMigration().catch(error => {
+runMigration().catch((error) => {
   console.error('Unhandled error:', error);
   process.exit(1);
 });

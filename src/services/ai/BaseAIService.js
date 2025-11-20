@@ -35,12 +35,13 @@ export default class BaseAIService {
     const senderName = email.from?.emailAddress?.name || '';
     const senderAddress = email.from?.emailAddress?.address || '';
     const receivedDate = email.receivedDateTime || '';
-    let bodyContent = email.bodyPreview  || '';
+    let bodyContent = email.bodyPreview || '';
 
     const MAX_BODY_CHARS = process.env.MAX_BODY_CHARS || 15000;
     if (bodyContent.length > MAX_BODY_CHARS) {
       console.log(`  ⚠ Email body very long (${bodyContent.length} chars), truncating...`);
-      bodyContent = bodyContent.substring(0, MAX_BODY_CHARS) + "\n\n[... Email truncated due to length ...]";
+      bodyContent =
+        bodyContent.substring(0, MAX_BODY_CHARS) + '\n\n[... Email truncated due to length ...]';
     }
 
     let content = `
@@ -177,7 +178,7 @@ IMPORTANT:
   calculateConfidence(parsedData) {
     const totalFields = Object.keys(parsedData).length;
     const filledFields = Object.values(parsedData).filter(
-      v => v !== null && v !== "" && v !== 0
+      (v) => v !== null && v !== '' && v !== 0
     ).length;
     return totalFields > 0 ? parseFloat((filledFields / totalFields).toFixed(2)) : 0.0;
   }
@@ -195,11 +196,13 @@ IMPORTANT:
         return await apiCallFn();
       } catch (error) {
         const status = error?.status || error?.response?.status;
-        
+
         // Handle rate limiting with exponential backoff
         if (rateLimitStatuses.includes(status) && attempt < maxRetries - 1) {
           const waitTime = 60 * (attempt + 1);
-          console.log(`  ⚠ Rate limit hit. Waiting ${waitTime} seconds before retry ${attempt + 2}/${maxRetries}...`);
+          console.log(
+            `  ⚠ Rate limit hit. Waiting ${waitTime} seconds before retry ${attempt + 2}/${maxRetries}...`
+          );
           await this.sleep(waitTime * 1000);
           continue;
         }
@@ -212,7 +215,7 @@ IMPORTANT:
 
         // Log other errors
         console.error(`  ✗ ${this.serviceName} API error:`, error.message || error.toString());
-        
+
         // Return null on last attempt
         if (attempt === maxRetries - 1) {
           return null;
@@ -244,7 +247,7 @@ IMPORTANT:
       results.push({
         email,
         parsedData,
-        success: parsedData !== null
+        success: parsedData !== null,
       });
 
       // Delay between requests to avoid rate limiting
@@ -262,7 +265,7 @@ IMPORTANT:
    * @returns {Promise}
    */
   sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**

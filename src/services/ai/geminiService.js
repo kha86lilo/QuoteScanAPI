@@ -30,7 +30,7 @@ class GeminiService extends BaseAIService {
 
     return await this.withRetry(async () => {
       const result = await this.model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: prompt }]}]
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
       });
 
       const responseText = (await result.response.text()).trim();
@@ -58,7 +58,7 @@ class GeminiService extends BaseAIService {
   async validateApiKey() {
     try {
       await this.model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: 'Hello' }]}]
+        contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
       });
       return true;
     } catch (error) {
@@ -81,9 +81,13 @@ class GeminiService extends BaseAIService {
 
     // Simple in-memory cache to avoid frequent calls
     const now = Date.now();
-    if (this._modelsCache && this._modelsCache.timestamp && (now - this._modelsCache.timestamp < 5 * 60 * 1000)) {
+    if (
+      this._modelsCache &&
+      this._modelsCache.timestamp &&
+      now - this._modelsCache.timestamp < 5 * 60 * 1000
+    ) {
       return filterGenerateContent
-        ? this._modelsCache.data.filter(m => (m.supported || []).includes('generateContent'))
+        ? this._modelsCache.data.filter((m) => (m.supported || []).includes('generateContent'))
         : this._modelsCache.data;
     }
 
@@ -95,23 +99,23 @@ class GeminiService extends BaseAIService {
         return [];
       }
       const json = await res.json();
-      const models = (json.models || []).map(m => {
+      const models = (json.models || []).map((m) => {
         const name = m.name?.startsWith('models/') ? m.name.replace('models/', '') : m.name;
         return {
           name,
-            displayName: m.displayName || name,
-            description: m.description || null,
-            inputTokens: m.inputTokenLimit || null,
-            outputTokens: m.outputTokenLimit || null,
-            supported: m.supportedGenerationMethods || [],
-            baseModel: m.baseModel || null
+          displayName: m.displayName || name,
+          description: m.description || null,
+          inputTokens: m.inputTokenLimit || null,
+          outputTokens: m.outputTokenLimit || null,
+          supported: m.supportedGenerationMethods || [],
+          baseModel: m.baseModel || null,
         };
       });
 
       this._modelsCache = { data: models, timestamp: now };
 
       return filterGenerateContent
-        ? models.filter(m => (m.supported || []).includes('generateContent'))
+        ? models.filter((m) => (m.supported || []).includes('generateContent'))
         : models;
     } catch (error) {
       console.error('✗ Error fetching models:', error.message || error.toString());

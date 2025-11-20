@@ -3,10 +3,10 @@
  * Main business logic for processing shipping quote emails
  */
 
-import * as microsoftGraphService from "./microsoftGraphService.js";
-import * as emailFilter from "./emailFilter.js";
-import * as db from "../config/db.js";
-import { getAIService, getProviderInfo } from "./ai/aiServiceFactory.js";
+import * as microsoftGraphService from './microsoftGraphService.js';
+import * as emailFilter from './emailFilter.js';
+import * as db from '../config/db.js';
+import { getAIService, getProviderInfo } from './ai/aiServiceFactory.js';
 
 class EmailExtractorService {
   /**
@@ -16,7 +16,7 @@ class EmailExtractorService {
    */
   async processEmails(options = {}) {
     const {
-      searchQuery = "quote OR shipping OR freight OR cargo",
+      searchQuery = 'quote OR shipping OR freight OR cargo',
       maxEmails = 100,
       startDate = null,
       scoreThreshold = 30,
@@ -28,12 +28,12 @@ class EmailExtractorService {
     const aiService = getAIService(aiProvider);
     const providerInfo = getProviderInfo();
 
-    console.log("\n" + "=".repeat(60));
-    console.log("EMAIL EXTRACTION WITH PRE-FILTERING");
-    console.log("=".repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('EMAIL EXTRACTION WITH PRE-FILTERING');
+    console.log('='.repeat(60));
     console.log(`AI Provider: ${providerInfo.current.toUpperCase()}`);
     console.log(`Model: ${providerInfo.models[providerInfo.current]}`);
-    console.log("=".repeat(60) + "\n");
+    console.log('='.repeat(60) + '\n');
 
     const results = {
       fetched: 0,
@@ -42,6 +42,7 @@ class EmailExtractorService {
       estimatedCost: 0,
       estimatedSavings: 0,
       errors: [],
+      lastReceivedDateTime: null,
     };
 
     try {
@@ -56,67 +57,65 @@ class EmailExtractorService {
       results.fetched = emails.length;
 
       if (emails.length === 0) {
-        console.log("No emails found.");
+        console.log('No emails found.');
         return results;
       }
 
       // Pre-filter emails
-      console.log(`\n${"=".repeat(60)}`);
-      console.log("STEP 1: PRE-FILTERING EMAILS");
-      console.log(`${"=".repeat(60)}\n`);
+      console.log(`\n${'='.repeat(60)}`);
+      console.log('STEP 1: PRE-FILTERING EMAILS');
+      console.log(`${'='.repeat(60)}\n`);
 
-      const { toProcess, toSkip, summary } = emailFilter.filterEmails(
-        emails,
-        scoreThreshold
-      );
+      const { toProcess, toSkip, summary } = emailFilter.filterEmails(emails, scoreThreshold);
 
       results.filtered.toProcess = toProcess.length;
       results.filtered.toSkip = toSkip.length;
       results.estimatedCost = summary.estimatedCost;
       results.estimatedSavings = summary.estimatedSavings;
 
+      // Track the maximum receivedDateTime from fetched emails
+      if (emails.length > 0) {
+        const maxReceivedDateTime = emails.reduce((max, email) => {
+          const emailDate = new Date(email.receivedDateTime);
+          return emailDate > max ? emailDate : max;
+        }, new Date(0));
+        results.lastReceivedDateTime = maxReceivedDateTime.toISOString();
+      }
+
       console.log(`Total emails fetched: ${summary.total}`);
       console.log(
         `✓ Passed filter (>= ${scoreThreshold}): ${summary.toProcess} (${summary.processPercentage}%)`
       );
       console.log(`✗ Filtered out: ${summary.toSkip}`);
-      console.log(
-        `💰 Estimated API cost: $${summary.estimatedCost.toFixed(2)}`
-      );
-      console.log(
-        `💾 Cost savings from filtering: $${summary.estimatedSavings.toFixed(
-          2
-        )}`
-      );
+      console.log(`💰 Estimated API cost: $${summary.estimatedCost.toFixed(2)}`);
+      console.log(`💾 Cost savings from filtering: $${summary.estimatedSavings.toFixed(2)}`);
 
       if (previewMode) {
-        console.log("\n⚠️ PREVIEW MODE - No emails will be processed");
+        console.log('\n⚠️ PREVIEW MODE - No emails will be processed');
         results.preview = { toProcess, toSkip, summary };
         return results;
       }
 
       if (toProcess.length === 0) {
         console.log(
-          "\n❌ No emails passed the filter. Try lowering the threshold or adjusting search terms."
+          '\n❌ No emails passed the filter. Try lowering the threshold or adjusting search terms.'
         );
         return results;
       }
 
       // Process filtered emails
-      console.log(`\n${"=".repeat(60)}`);
+      console.log(`\n${'='.repeat(60)}`);
       console.log(
         `STEP 2: PROCESSING FILTERED EMAILS WITH ${providerInfo.current.toUpperCase()} AI`
       );
-      console.log(`${"=".repeat(60)}\n`);
+      console.log(`${'='.repeat(60)}\n`);
 
       for (let i = 0; i < toProcess.length; i++) {
         const email = toProcess[i];
         const emailNum = i + 1;
-        const subject = (email.subject || "No Subject").substring(0, 50);
+        const subject = (email.subject || 'No Subject').substring(0, 50);
 
-        console.log(
-          `[${emailNum}/${toProcess.length}] Processing: ${subject}...`
-        );
+        console.log(`[${emailNum}/${toProcess.length}] Processing: ${subject}...`);
 
         try {
           // Check if already processed
@@ -128,18 +127,14 @@ class EmailExtractorService {
           }
 
           // Try parsing email bodyPreview first
-          let parsedData = await aiService.parseEmail(email, 3, "");
+          let parsedData = await aiService.parseEmail(email, 3, '');
 
           // If parsing fails and email has attachments, try with attachment content
           if (!parsedData && email.hasAttachments) {
-            console.log(
-              `  ⚠ Initial parsing failed, processing attachments...`
-            );
-            const { processEmailAttachments } = await import(
-              "./attachmentProcessor.js"
-            );
+            console.log(`  ⚠ Initial parsing failed, processing attachments...`);
+            const { processEmailAttachments } = await import('./attachmentProcessor.js');
             const attachmentResults = await processEmailAttachments(email.id);
-            const attachmentText = attachmentResults.extractedText || "";
+            const attachmentText = attachmentResults.extractedText || '';
 
             if (attachmentText) {
               parsedData = await aiService.parseEmail(email, 3, attachmentText);
@@ -172,9 +167,9 @@ class EmailExtractorService {
       }
 
       // Summary
-      console.log("\n" + "=".repeat(60));
-      console.log("PROCESSING COMPLETE");
-      console.log("=".repeat(60));
+      console.log('\n' + '='.repeat(60));
+      console.log('PROCESSING COMPLETE');
+      console.log('='.repeat(60));
       console.log(`📊 Fetched: ${results.fetched} emails`);
       console.log(`✓ Passed filter: ${results.filtered.toProcess} emails`);
       console.log(`⊘ Filtered out: ${results.filtered.toSkip} emails`);
@@ -183,11 +178,9 @@ class EmailExtractorService {
       console.log(`✗ Failed: ${results.processed.failed}`);
       const requestPrice = parseFloat(process.env.REQUEST_PRICE) || 0.015;
       const actualCost = results.processed.successful * requestPrice;
-      console.log(
-        `💰 Actual cost: $${actualCost.toFixed(2)}`
-      );
+      console.log(`💰 Actual cost: $${actualCost.toFixed(2)}`);
       console.log(`💾 Money saved: $${results.estimatedSavings.toFixed(2)}`);
-      console.log("=".repeat(60) + "\n");
+      console.log('='.repeat(60) + '\n');
 
       // Create comprehensive summary
       results.summary = {
@@ -201,12 +194,13 @@ class EmailExtractorService {
         model: providerInfo.models[providerInfo.current],
         searchQuery: searchQuery,
         scoreThreshold: scoreThreshold,
-        completedAt: new Date().toISOString()
+        completedAt: new Date().toISOString(),
+        lastReceivedDateTime: results.lastReceivedDateTime,
       };
 
       return results;
     } catch (error) {
-      console.error("✗ Error in email processing:", error);
+      console.error('✗ Error in email processing:', error);
       results.errors.push({
         error: error.message,
         stack: error.stack,
@@ -222,7 +216,7 @@ class EmailExtractorService {
    */
   async previewEmails(options = {}) {
     const {
-      searchQuery = "quote OR shipping OR freight OR cargo",
+      searchQuery = 'quote OR shipping OR freight OR cargo',
       maxEmails = 100,
       startDate = null,
       scoreThreshold = 30,

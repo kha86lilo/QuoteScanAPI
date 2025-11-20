@@ -3,9 +3,9 @@
  * Handles email parsing using OpenAI's Chat Completions API
  */
 
-import OpenAI from "openai";
+import OpenAI from 'openai';
 import BaseAIService from './BaseAIService.js';
-import dotenv from "dotenv";
+import dotenv from 'dotenv';
 dotenv.config();
 
 class ChatGPTService extends BaseAIService {
@@ -13,7 +13,7 @@ class ChatGPTService extends BaseAIService {
     super('ChatGPT');
     const apiKey = process.env.GPT_API_KEY;
     this.client = new OpenAI({ apiKey });
-    this.modelName = process.env.OPENAI_MODEL || "gpt-4o-mini";
+    this.modelName = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   }
 
   /**
@@ -33,18 +33,16 @@ class ChatGPTService extends BaseAIService {
         temperature: 0,
         messages: [
           {
-            role: "system",
+            role: 'system',
             content:
-              "You extract structured JSON from emails for shipping quotes. Respond with only valid JSON.",
+              'You extract structured JSON from emails for shipping quotes. Respond with only valid JSON.',
           },
-          { role: "user", content: prompt },
+          { role: 'user', content: prompt },
         ],
       });
 
-      const responseText = (
-        completion.choices?.[0]?.message?.content || ""
-      ).trim();
-      
+      const responseText = (completion.choices?.[0]?.message?.content || '').trim();
+
       const parsedData = this.cleanAndParseResponse(responseText);
       const confidence = this.calculateConfidence(parsedData);
 
@@ -70,14 +68,11 @@ class ChatGPTService extends BaseAIService {
     try {
       await this.client.chat.completions.create({
         model: this.modelName,
-        messages: [{ role: "user", content: "Hello" }],
+        messages: [{ role: 'user', content: 'Hello' }],
       });
       return true;
     } catch (error) {
-      console.error(
-        "✗ Invalid OpenAI API key:",
-        error.message || error.toString()
-      );
+      console.error('✗ Invalid OpenAI API key:', error.message || error.toString());
       return false;
     }
   }
@@ -96,10 +91,7 @@ class ChatGPTService extends BaseAIService {
       }));
       return models;
     } catch (error) {
-      console.error(
-        "✗ Error listing OpenAI models:",
-        error.message || error.toString()
-      );
+      console.error('✗ Error listing OpenAI models:', error.message || error.toString());
       return [];
     }
   }
@@ -107,5 +99,4 @@ class ChatGPTService extends BaseAIService {
 
 const chatgptService = new ChatGPTService();
 export default chatgptService;
-export const { parseEmailWithChatGPT, validateApiKey, listAvailableModels } =
-  chatgptService;
+export const { parseEmailWithChatGPT, validateApiKey, listAvailableModels } = chatgptService;

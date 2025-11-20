@@ -16,7 +16,7 @@ const pool = new Pool({
   password: process.env.SUPABASE_DB_PASSWORD,
   port: parseInt(process.env.SUPABASE_DB_PORT || '5432'),
   ssl: {
-    rejectUnauthorized: false
+    rejectUnauthorized: false,
   },
   max: 20,
   idleTimeoutMillis: 30000,
@@ -59,7 +59,7 @@ async function checkEmailExists(messageId) {
  */
 async function saveQuoteToDatabase(email, parsedData) {
   const client = await pool.connect();
-  
+
   try {
     const query = `
       INSERT INTO shipping_quotes (
@@ -104,7 +104,7 @@ async function saveQuoteToDatabase(email, parsedData) {
         $57, $58, $59, $60, $61, $62
       ) RETURNING quote_id
     `;
-    
+
     const values = [
       email.id,
       email.subject,
@@ -114,7 +114,7 @@ async function saveQuoteToDatabase(email, parsedData) {
       email.bodyPreview,
       email.hasAttachments || false,
       email.body?.content,
-      
+
       // Client info
       parsedData.client_company_name,
       parsedData.contact_person_name,
@@ -123,7 +123,7 @@ async function saveQuoteToDatabase(email, parsedData) {
       parsedData.company_address,
       parsedData.client_type,
       parsedData.industry_business_type,
-      
+
       // Origin
       parsedData.origin_full_address,
       parsedData.origin_city,
@@ -132,7 +132,7 @@ async function saveQuoteToDatabase(email, parsedData) {
       parsedData.origin_postal_code,
       parsedData.requested_pickup_date,
       parsedData.pickup_special_requirements,
-      
+
       // Destination
       parsedData.destination_full_address,
       parsedData.destination_city,
@@ -141,7 +141,7 @@ async function saveQuoteToDatabase(email, parsedData) {
       parsedData.destination_postal_code,
       parsedData.requested_delivery_date,
       parsedData.delivery_special_requirements,
-      
+
       // Cargo
       parsedData.cargo_length,
       parsedData.cargo_width,
@@ -154,7 +154,7 @@ async function saveQuoteToDatabase(email, parsedData) {
       parsedData.hazardous_material,
       parsedData.declared_value,
       parsedData.packaging_type,
-      
+
       // Service
       parsedData.service_type,
       parsedData.service_level,
@@ -162,7 +162,7 @@ async function saveQuoteToDatabase(email, parsedData) {
       parsedData.insurance_required,
       parsedData.customs_clearance_needed,
       parsedData.transit_time_quoted,
-      
+
       // Quote/Pricing
       parsedData.quote_date,
       parsedData.initial_quote_amount,
@@ -171,21 +171,21 @@ async function saveQuoteToDatabase(email, parsedData) {
       parsedData.discount_given,
       parsedData.discount_reason,
       parsedData.final_agreed_price,
-      
+
       // Status
       parsedData.quote_status,
       parsedData.job_won,
       parsedData.rejection_reason,
-      
+
       // Additional
       parsedData.sales_representative,
       parsedData.lead_source,
       parsedData.special_requirements,
       parsedData.urgency_level,
       parsedData.ai_confidence_score,
-      new Date()
+      new Date(),
     ];
-    
+
     const result = await client.query(query, values);
     return result.rows[0];
   } finally {
@@ -215,9 +215,38 @@ async function getProcessingStats() {
   }
 }
 
+/**
+ * Get the latest lastReceivedDateTime from completed processing jobs
+ * @returns {Promise<string|null>} ISO string of last received datetime or null
+ */
+async function getLatestLastReceivedDateTime() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(`
+      SELECT last_received_datetime
+      FROM processing_jobs
+      WHERE status = 'completed'
+        AND last_received_datetime IS NOT NULL
+      ORDER BY last_received_datetime DESC
+      LIMIT 1
+    `);
+
+    if (result.rows.length > 0 && result.rows[0].last_received_datetime) {
+      return result.rows[0].last_received_datetime.toISOString();
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting latest lastReceivedDateTime:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
   saveQuoteToDatabase,
-  getProcessingStats
+  getProcessingStats,
+  getLatestLastReceivedDateTime,
 };

@@ -17,7 +17,7 @@ export const AI_PROVIDERS = {
   GEMINI: 'gemini',
   CLAUDE: 'claude',
   CHATGPT: 'chatgpt',
-  OPENAI: 'openai' // Alias for chatgpt
+  OPENAI: 'openai', // Alias for chatgpt
 };
 
 /**
@@ -28,7 +28,11 @@ export const AI_PROVIDERS = {
  */
 export function getAIService(provider = null) {
   // Use override or fall back to environment variable
-  const selectedProvider = (provider || process.env.AI_PROVIDER || AI_PROVIDERS.CHATGPT).toLowerCase();
+  const selectedProvider = (
+    provider ||
+    process.env.AI_PROVIDER ||
+    AI_PROVIDERS.CHATGPT
+  ).toLowerCase();
 
   switch (selectedProvider) {
     case AI_PROVIDERS.GEMINI:
@@ -51,7 +55,9 @@ export function getAIService(provider = null) {
       return chatgptService;
 
     default:
-      throw new Error(`Unknown AI provider: ${selectedProvider}. Valid options: gemini, claude, chatgpt`);
+      throw new Error(
+        `Unknown AI provider: ${selectedProvider}. Valid options: gemini, claude, chatgpt`
+      );
   }
 }
 
@@ -84,17 +90,17 @@ export async function validateProvider(provider) {
   try {
     const service = getAIService(provider);
     const isValid = await service.validateApiKey();
-    
+
     return {
       valid: isValid,
       provider: provider,
-      message: isValid ? `${provider} API key is valid` : `${provider} API key is invalid`
+      message: isValid ? `${provider} API key is valid` : `${provider} API key is invalid`,
     };
   } catch (error) {
     return {
       valid: false,
       provider: provider,
-      message: error.message
+      message: error.message,
     };
   }
 }
@@ -129,13 +135,13 @@ export function getProviderInfo() {
     configured: {
       gemini: !!process.env.GEMINI_API_KEY,
       claude: !!process.env.ANTHROPIC_API_KEY,
-      chatgpt: !!process.env.GPT_API_KEY
+      chatgpt: !!process.env.GPT_API_KEY,
     },
     models: {
       gemini: process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-05-20',
       claude: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
-      chatgpt: process.env.OPENAI_MODEL || 'gpt-4o-mini'
-    }
+      chatgpt: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    },
   };
 }
 
@@ -145,5 +151,5 @@ export default {
   getAvailableProviders,
   validateProvider,
   validateAllProviders,
-  getProviderInfo
+  getProviderInfo,
 };

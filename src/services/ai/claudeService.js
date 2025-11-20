@@ -12,7 +12,7 @@ class ClaudeService extends BaseAIService {
   constructor() {
     super('Claude');
     this.client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY
+      apiKey: process.env.ANTHROPIC_API_KEY,
     });
     this.modelName = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
   }
@@ -32,9 +32,7 @@ class ClaudeService extends BaseAIService {
       const message = await this.client.messages.create({
         model: this.modelName,
         max_tokens: 4000,
-        messages: [
-          { role: 'user', content: prompt }
-        ]
+        messages: [{ role: 'user', content: prompt }],
       });
 
       const responseText = message.content[0].text.trim();
@@ -64,9 +62,7 @@ class ClaudeService extends BaseAIService {
       await this.client.messages.create({
         model: this.modelName,
         max_tokens: 10,
-        messages: [
-          { role: 'user', content: 'Hello' }
-        ]
+        messages: [{ role: 'user', content: 'Hello' }],
       });
       return true;
     } catch (error) {

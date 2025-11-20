@@ -17,7 +17,7 @@ class AttachmentProcessor {
     this.supportedTypes = {
       pdf: ['.pdf'],
       excel: ['.xlsx', '.xls', '.csv'],
-      image: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff']
+      image: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'],
     };
   }
 
@@ -30,7 +30,7 @@ class AttachmentProcessor {
     try {
       // Fetch attachments from Microsoft Graph
       const attachments = await microsoftGraphService.default.fetchAttachments(emailId);
-      
+
       if (!attachments || attachments.length === 0) {
         return { hasAttachments: false, extractedText: '', attachments: [] };
       }
@@ -42,7 +42,7 @@ class AttachmentProcessor {
         extractedText: '',
         attachments: [],
         processedCount: 0,
-        skippedCount: 0
+        skippedCount: 0,
       };
 
       // Process each attachment
@@ -56,14 +56,14 @@ class AttachmentProcessor {
           results.attachments.push({
             name: fileName,
             processed: false,
-            reason: 'Unsupported file type'
+            reason: 'Unsupported file type',
           });
           continue;
         }
 
         try {
           console.log(`  📄 Processing ${fileType.toUpperCase()}: ${fileName}`);
-          
+
           // Get attachment content (base64 encoded)
           const contentBytes = attachment.contentBytes;
           if (!contentBytes) {
@@ -76,7 +76,7 @@ class AttachmentProcessor {
 
           // Extract text based on file type
           let extractedText = '';
-          
+
           switch (fileType) {
             case 'pdf':
               extractedText = await this.extractFromPDF(buffer);
@@ -96,7 +96,7 @@ class AttachmentProcessor {
               name: fileName,
               type: fileType,
               processed: true,
-              textLength: extractedText.length
+              textLength: extractedText.length,
             });
             console.log(`  ✓ Extracted ${extractedText.length} characters from ${fileName}`);
           } else {
@@ -105,23 +105,21 @@ class AttachmentProcessor {
               name: fileName,
               type: fileType,
               processed: false,
-              reason: 'No text extracted'
+              reason: 'No text extracted',
             });
           }
-
         } catch (error) {
           console.error(`  ✗ Error processing ${fileName}:`, error.message);
           results.attachments.push({
             name: fileName,
             processed: false,
-            error: error.message
+            error: error.message,
           });
         }
       }
 
       console.log(`  ✓ Processed ${results.processedCount}/${attachments.length} attachments`);
       return results;
-
     } catch (error) {
       console.error(`✗ Error fetching attachments:`, error.message);
       return { hasAttachments: false, extractedText: '', error: error.message };
@@ -159,15 +157,17 @@ class AttachmentProcessor {
       // Process each sheet
       workbook.eachSheet((worksheet, sheetId) => {
         extractedText += `\n\n[Sheet: ${worksheet.name}]\n`;
-        
+
         worksheet.eachRow((row, rowNumber) => {
           const values = row.values.slice(1); // Skip index 0 which is undefined
-          const rowText = values.map(cell => {
-            if (cell === null || cell === undefined) return '';
-            if (typeof cell === 'object' && cell.text) return cell.text;
-            return String(cell);
-          }).join(',');
-          
+          const rowText = values
+            .map((cell) => {
+              if (cell === null || cell === undefined) return '';
+              if (typeof cell === 'object' && cell.text) return cell.text;
+              return String(cell);
+            })
+            .join(',');
+
           if (rowText.trim()) {
             extractedText += rowText + '\n';
           }
@@ -189,9 +189,9 @@ class AttachmentProcessor {
   async extractFromImage(buffer) {
     try {
       const result = await Tesseract.recognize(buffer, 'eng', {
-        logger: () => {} // Suppress tesseract logs
+        logger: () => {}, // Suppress tesseract logs
       });
-      
+
       return result.data.text || '';
     } catch (error) {
       console.error('  ✗ OCR error:', error.message);
@@ -206,11 +206,11 @@ class AttachmentProcessor {
    */
   getFileType(fileName) {
     const extension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
-    
+
     if (this.supportedTypes.pdf.includes(extension)) return 'pdf';
     if (this.supportedTypes.excel.includes(extension)) return 'excel';
     if (this.supportedTypes.image.includes(extension)) return 'image';
-    
+
     return null;
   }
 
@@ -228,16 +228,14 @@ class AttachmentProcessor {
    * @returns {Array<string>} Array of supported extensions
    */
   getSupportedExtensions() {
-    return [
-      ...this.supportedTypes.pdf,
-      ...this.supportedTypes.excel,
-      ...this.supportedTypes.image
-    ];
+    return [...this.supportedTypes.pdf, ...this.supportedTypes.excel, ...this.supportedTypes.image];
   }
 }
 
 const attachmentProcessor = new AttachmentProcessor();
 export default attachmentProcessor;
-export const processEmailAttachments = attachmentProcessor.processEmailAttachments.bind(attachmentProcessor);
+export const processEmailAttachments =
+  attachmentProcessor.processEmailAttachments.bind(attachmentProcessor);
 export const isSupported = attachmentProcessor.isSupported.bind(attachmentProcessor);
-export const getSupportedExtensions = attachmentProcessor.getSupportedExtensions.bind(attachmentProcessor);
+export const getSupportedExtensions =
+  attachmentProcessor.getSupportedExtensions.bind(attachmentProcessor);

@@ -12,9 +12,9 @@ const API_BASE_URL = 'http://localhost:3000/api';
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
   },
-  timeout: 300000 // 5 minutes timeout for long operations
+  timeout: 300000, // 5 minutes timeout for long operations
 });
 
 /**
@@ -40,7 +40,7 @@ async function previewEmails() {
     const response = await api.post('/emails/preview', {
       searchQuery: 'quote OR shipping OR freight',
       maxEmails: 10,
-      scoreThreshold: 30
+      scoreThreshold: 30,
     });
 
     const { preview } = response.data;
@@ -69,9 +69,9 @@ async function processEmails() {
   try {
     const response = await api.post('/emails/process', {
       searchQuery: 'quote OR shipping',
-      maxEmails: 5,  // Start small for testing
+      maxEmails: 5, // Start small for testing
       scoreThreshold: 30,
-      previewMode: false
+      previewMode: false,
     });
 
     const { results } = response.data;
@@ -85,7 +85,7 @@ async function processEmails() {
 
     if (results.errors && results.errors.length > 0) {
       console.log('\nErrors:');
-      results.errors.forEach(err => {
+      results.errors.forEach((err) => {
         console.log(`  - ${err.subject}: ${err.error}`);
       });
     }
@@ -120,7 +120,7 @@ async function getRecentQuotes() {
   console.log('\n=== Example 5: Get Recent Quotes ===');
   try {
     const response = await api.get('/quotes', {
-      params: { limit: 5, offset: 0 }
+      params: { limit: 5, offset: 0 },
     });
 
     const { quotes, pagination } = response.data;
@@ -130,7 +130,9 @@ async function getRecentQuotes() {
       console.log(`${i + 1}. ${quote.client_company_name || 'Unknown Company'}`);
       console.log(`   Contact: ${quote.contact_person_name || 'N/A'}`);
       console.log(`   Status: ${quote.quote_status || 'N/A'}`);
-      console.log(`   Origin: ${quote.origin_city || 'N/A'} → Destination: ${quote.destination_city || 'N/A'}`);
+      console.log(
+        `   Origin: ${quote.origin_city || 'N/A'} → Destination: ${quote.destination_city || 'N/A'}`
+      );
       console.log(`   Confidence: ${quote.ai_confidence_score || 0}`);
       console.log(`   Processed: ${new Date(quote.processed_at).toLocaleString()}`);
       console.log();
@@ -214,7 +216,7 @@ async function fetchRawEmails() {
   try {
     const response = await api.post('/emails/fetch', {
       searchQuery: 'quote',
-      maxEmails: 3
+      maxEmails: 3,
     });
 
     const { emails, count } = response.data;
@@ -222,7 +224,9 @@ async function fetchRawEmails() {
 
     emails.forEach((email, i) => {
       console.log(`${i + 1}. ${email.subject}`);
-      console.log(`   From: ${email.from?.emailAddress?.name} <${email.from?.emailAddress?.address}>`);
+      console.log(
+        `   From: ${email.from?.emailAddress?.name} <${email.from?.emailAddress?.address}>`
+      );
       console.log(`   Date: ${new Date(email.receivedDateTime).toLocaleString()}`);
       console.log(`   Has Attachments: ${email.hasAttachments ? 'Yes' : 'No'}`);
       console.log(`   Preview: ${email.bodyPreview?.substring(0, 100)}...`);
@@ -248,11 +252,10 @@ async function main() {
     await previewEmails();
     await getRecentQuotes();
     await searchQuotes();
-    
+
     // Uncomment to actually fetch and process emails:
     // await fetchRawEmails();
     // await processEmails();
-
   } catch (error) {
     console.error('\nFatal error:', error.message);
   }
@@ -276,5 +279,5 @@ module.exports = {
   getRecentQuotes,
   searchQuotes,
   testConnections,
-  fetchRawEmails
+  fetchRawEmails,
 };

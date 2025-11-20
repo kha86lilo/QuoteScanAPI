@@ -15,7 +15,7 @@ export const emailProcessingLimiter = rateLimit({
   message: {
     success: false,
     error: 'Too many processing requests. Please wait before submitting another job.',
-    retryAfter: 'Check the Retry-After header for when you can retry'
+    retryAfter: 'Check the Retry-After header for when you can retry',
   },
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
@@ -24,9 +24,10 @@ export const emailProcessingLimiter = rateLimit({
     res.status(429).json({
       success: false,
       error: 'Too many processing requests',
-      message: 'You have exceeded the rate limit. Only one email processing job is allowed at a time.',
+      message:
+        'You have exceeded the rate limit. Only one email processing job is allowed at a time.',
       retryAfter: `${retryAfter} seconds`,
-      resetTime: new Date(req.rateLimit.resetTime).toISOString()
+      resetTime: new Date(req.rateLimit.resetTime).toISOString(),
     });
   },
   // Skip rate limiting for certain conditions (e.g., admins)
@@ -37,7 +38,7 @@ export const emailProcessingLimiter = rateLimit({
       return true;
     }
     return false;
-  }
+  },
 });
 
 /**
@@ -49,10 +50,10 @@ export const generalApiLimiter = rateLimit({
   max: 100, // 100 requests per 15 minutes
   message: {
     success: false,
-    error: 'Too many requests from this IP. Please try again later.'
+    error: 'Too many requests from this IP. Please try again later.',
   },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 });
 
 /**
@@ -64,14 +65,14 @@ export const statusCheckLimiter = rateLimit({
   max: 30, // 30 requests per minute (poll every 2 seconds)
   message: {
     success: false,
-    error: 'Too many status check requests. Please slow down.'
+    error: 'Too many status check requests. Please slow down.',
   },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 });
 
 export default {
   emailProcessingLimiter,
   generalApiLimiter,
-  statusCheckLimiter
+  statusCheckLimiter,
 };

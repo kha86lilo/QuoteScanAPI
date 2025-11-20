@@ -7,7 +7,7 @@ import express from 'express';
 import * as emailController from '../controllers/email.controller.js';
 import { emailProcessingLimiter, generalApiLimiter } from '../middleware/rateLimiter.js';
 
-const router = express.Router(); 
+const router = express.Router();
 
 /**
  * Process emails with rate limiting
@@ -15,6 +15,14 @@ const router = express.Router();
  * Rate limited to 1 request per minute
  */
 router.post('/process', emailProcessingLimiter, emailController.processEmails);
+
+/**
+ * Process only new emails since last job
+ * POST /api/emails/processnewentries
+ * Automatically uses lastReceivedDateTime from most recent completed job
+ * Rate limited to 1 request per minute
+ */
+router.post('/processnewentries', emailProcessingLimiter, emailController.processNewEntries);
 
 /**
  * Preview emails that would be processed

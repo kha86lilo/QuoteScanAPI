@@ -11,10 +11,9 @@ dotenv.config();
 let accessToken = null;
 let tokenExpiry = null;
 
-class MicrosoftGraphService { 
-  constructor() { 
-  }
-  
+class MicrosoftGraphService {
+  constructor() {}
+
   /**
    * Get Microsoft Graph API access token using client credentials flow
    * @returns {Promise<string>} Access token
@@ -26,25 +25,25 @@ class MicrosoftGraphService {
     }
 
     const tokenUrl = `https://login.microsoftonline.com/${process.env.MS_TENANT_ID}/oauth2/v2.0/token`;
-    
+
     const params = new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: process.env.MS_CLIENT_ID,
       client_secret: process.env.MS_CLIENT_SECRET,
-      scope: 'https://graph.microsoft.com/.default'
+      scope: 'https://graph.microsoft.com/.default',
     });
 
     try {
       const response = await axios.post(tokenUrl, params, {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
       });
 
       accessToken = response.data.access_token;
       // Set token expiry to 5 minutes before actual expiry
       tokenExpiry = Date.now() + (response.data.expires_in - 300) * 1000;
-      
+
       console.log('✓ Obtained Microsoft Graph API access token');
       return accessToken;
     } catch (error) {
@@ -61,21 +60,25 @@ class MicrosoftGraphService {
    * @param {string} options.startDate - Optional start date (YYYY-MM-DD)
    * @returns {Promise<Array>} Array of email objects
    */
-  async fetchEmails({ searchQuery = 'quote OR shipping OR freight OR cargo', top = 100, startDate = null }) {
+  async fetchEmails({
+    searchQuery = 'quote OR shipping OR freight OR cargo',
+    top = 100,
+    startDate = null,
+  }) {
     const token = await this.getAccessToken();
-    
+
     const headers = {
-      'Authorization': `Bearer ${token}`,
-      'ConsistencyLevel': 'eventual'
+      Authorization: `Bearer ${token}`,
+      ConsistencyLevel: 'eventual',
     };
 
     const baseUrl = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages`;
-    
+
     const params = {
-      '$search': `"${searchQuery}"`,
-      '$top': top,
-      '$select': 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
-      '?$orderby': 'receivedDateTime DESC'
+      $search: `"${searchQuery}"`,
+      $top: top,
+      $select: 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
+      '?$orderby': 'receivedDateTime DESC',
     };
 
     // Add date filter if provided
@@ -84,14 +87,14 @@ class MicrosoftGraphService {
     }
 
     try {
-      const response = await axios.get(baseUrl, { 
-        headers, 
-        params 
+      const response = await axios.get(baseUrl, {
+        headers,
+        params,
       });
 
       const emails = response.data.value || [];
       console.log(`✓ Fetched ${emails.length} emails from Microsoft 365`);
-      
+
       return emails;
     } catch (error) {
       console.error('✗ Failed to fetch emails:', error.response?.data || error.message);
@@ -106,9 +109,9 @@ class MicrosoftGraphService {
    */
   async fetchAttachments(messageId) {
     const token = await this.getAccessToken();
-    
+
     const headers = {
-      'Authorization': `Bearer ${token}`
+      Authorization: `Bearer ${token}`,
     };
 
     const url = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages/${messageId}/attachments`;
@@ -130,9 +133,9 @@ class MicrosoftGraphService {
    */
   async downloadAttachment(messageId, attachmentId) {
     const token = await this.getAccessToken();
-    
+
     const headers = {
-      'Authorization': `Bearer ${token}`
+      Authorization: `Bearer ${token}`,
     };
 
     const url = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages/${messageId}/attachments/${attachmentId}`;
@@ -153,36 +156,36 @@ class MicrosoftGraphService {
    */
   async advancedSearch(filters) {
     const token = await this.getAccessToken();
-    
+
     const headers = {
-      'Authorization': `Bearer ${token}`,
-      'ConsistencyLevel': 'eventual'
+      Authorization: `Bearer ${token}`,
+      ConsistencyLevel: 'eventual',
     };
 
     const baseUrl = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages`;
-    
+
     let filterQuery = [];
-    
+
     if (filters.from) {
       filterQuery.push(`from/emailAddress/address eq '${filters.from}'`);
     }
-    
+
     if (filters.hasAttachments !== undefined) {
       filterQuery.push(`hasAttachments eq ${filters.hasAttachments}`);
     }
-    
+
     if (filters.startDate) {
       filterQuery.push(`receivedDateTime ge ${filters.startDate}T00:00:00Z`);
     }
-    
+
     if (filters.endDate) {
       filterQuery.push(`receivedDateTime le ${filters.endDate}T23:59:59Z`);
     }
 
     const params = {
-      '$top': filters.top || 100,
-      '$select': 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
-      '$orderby': 'receivedDateTime DESC'
+      $top: filters.top || 100,
+      $select: 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
+      $orderby: 'receivedDateTime DESC',
     };
 
     if (filters.searchQuery) {

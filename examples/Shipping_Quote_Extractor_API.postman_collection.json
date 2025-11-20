@@ -1,470 +1,375 @@
 {
-	"info": {
-		"_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-		"name": "Shipping Quote Extractor API",
-		"description": "Complete Postman collection for testing the Shipping Quote Email Extractor Express.js API",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-		"_exporter_id": "12345678"
-	},
-	"item": [
-		{
-			"name": "Health & Testing",
-			"item": [
-				{
-					"name": "Health Check",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/health",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"health"
-							]
-						},
-						"description": "Check if the API and database are operational"
-					},
-					"response": []
-				},
-				{
-					"name": "Test Microsoft Graph Connection",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/test/graph",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"test",
-								"graph"
-							]
-						},
-						"description": "Test connection to Microsoft Graph API"
-					},
-					"response": []
-				},
-				{
-					"name": "Test Claude API Connection",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/test/claude",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"test",
-								"claude"
-							]
-						},
-						"description": "Test connection to Anthropic Claude API"
-					},
-					"response": []
-				},
-				{
-					"name": "Test Database Connection",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/test/database",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"test",
-								"database"
-							]
-						},
-						"description": "Test connection to PostgreSQL database"
-					},
-					"response": []
-				},
-				{
-					"name": "Get API Info",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/",
-							"host": [
-								"{{baseUrl}}"
-							]
-						},
-						"description": "Get API information and available endpoints"
-					},
-					"response": []
-				}
-			],
-			"description": "Health checks and connection tests"
-		},
-		{
-			"name": "Email Processing",
-			"item": [
-				{
-					"name": "Process Emails - Filtering",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"searchQuery\": \"quote OR shipping OR freight OR cargo\",\n  \"maxEmails\": 10,\n  \"startDate\": null,\n  \"scoreThreshold\": 30,\n  \"previewMode\": false\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/emails/process",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"emails",
-								"process"
-							]
-						},
-						"description": "Process emails with  pre-filtering to reduce Claude API costs"
-					},
-					"response": []
-				}, 
-				{
-					"name": "Preview Emails (No Processing)",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"searchQuery\": \"quote OR shipping OR freight\",\n  \"maxEmails\": 20,\n  \"startDate\": null,\n  \"scoreThreshold\": 30\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/emails/preview",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"emails",
-								"preview"
-							]
-						},
-						"description": "Preview which emails would be processed without actually processing them"
-					},
-					"response": []
-				},
-				{
-					"name": "Fetch Raw Emails from M365",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"searchQuery\": \"quote OR shipping\",\n  \"maxEmails\": 10,\n  \"startDate\": null\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/emails/fetch",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"emails",
-								"fetch"
-							]
-						},
-						"description": "Fetch raw emails from Microsoft 365 without processing"
-					},
-					"response": []
-				},
-				{
-					"name": "Parse Single Email with Claude",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"email\": {\n    \"id\": \"test-email-id-123\",\n    \"subject\": \"Quote Request - Shipping from NYC to LA\",\n    \"body\": {\n      \"content\": \"Hi, I need a quote for shipping 3 pallets from New York City to Los Angeles. Total weight is approximately 500 lbs. Need delivery by next week. Please advise pricing. Thanks, John Doe, Acme Corp, john@acmecorp.com, 555-1234\"\n    },\n    \"from\": {\n      \"emailAddress\": {\n        \"name\": \"John Doe\",\n        \"address\": \"john@acmecorp.com\"\n      }\n    },\n    \"receivedDateTime\": \"2024-11-18T10:30:00Z\",\n    \"bodyPreview\": \"Hi, I need a quote for shipping 3 pallets...\",\n    \"hasAttachments\": false\n  }\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/emails/parse",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"emails",
-								"parse"
-							]
-						},
-						"description": "Parse a single email with Claude AI (useful for testing)"
-					},
-					"response": []
-				}
-			],
-			"description": "Email fetching and processing endpoints"
-		},
-		{
-			"name": "Quote Management",
-			"item": [
-				{
-					"name": "Get All Quotes",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes?limit=50&offset=0",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes"
-							],
-							"query": [
-								{
-									"key": "limit",
-									"value": "50"
-								},
-								{
-									"key": "offset",
-									"value": "0"
-								}
-							]
-						},
-						"description": "Get all quotes with pagination"
-					},
-					"response": []
-				},
-				{
-					"name": "Get Quote by ID",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes/:id",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes",
-								":id"
-							],
-							"variable": [
-								{
-									"key": "id",
-									"value": "1",
-									"description": "Quote ID"
-								}
-							]
-						},
-						"description": "Get a specific quote by its ID"
-					},
-					"response": []
-				},
-				{
-					"name": "Search Quotes - By Company",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"clientCompanyName\": \"Acme\"\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes/search",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes",
-								"search"
-							]
-						},
-						"description": "Search quotes by company name"
-					},
-					"response": []
-				},
-				{
-					"name": "Search Quotes - By Status",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"quoteStatus\": \"Pending\"\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes/search",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes",
-								"search"
-							]
-						},
-						"description": "Search quotes by status (Pending, Approved, Rejected, Expired)"
-					},
-					"response": []
-				},
-				{
-					"name": "Search Quotes - By Date Range",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"startDate\": \"2024-01-01\",\n  \"endDate\": \"2024-12-31\"\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes/search",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes",
-								"search"
-							]
-						},
-						"description": "Search quotes within a date range"
-					},
-					"response": []
-				},
-				{
-					"name": "Search Quotes - Advanced",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"clientCompanyName\": \"Acme\",\n  \"quoteStatus\": \"Pending\",\n  \"startDate\": \"2024-01-01\",\n  \"endDate\": \"2024-12-31\"\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes/search",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes",
-								"search"
-							]
-						},
-						"description": "Search quotes with multiple criteria"
-					},
-					"response": []
-				},
-				{
-					"name": "Delete Quote",
-					"request": {
-						"method": "DELETE",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/quotes/:id",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"quotes",
-								":id"
-							],
-							"variable": [
-								{
-									"key": "id",
-									"value": "1",
-									"description": "Quote ID to delete"
-								}
-							]
-						},
-						"description": "Delete a quote by its ID"
-					},
-					"response": []
-				}
-			],
-			"description": "Quote retrieval, search, and management"
-		},
-		{
-			"name": "Statistics",
-			"item": [
-				{
-					"name": "Get Processing Statistics",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/stats",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"api",
-								"stats"
-							]
-						},
-						"description": "Get statistics about processed emails and quotes"
-					},
-					"response": []
-				}
-			],
-			"description": "Statistics and analytics endpoints"
-		}
-	],
-	"variable": [
-		{
-			"key": "baseUrl",
-			"value": "http://localhost:3000",
-			"type": "string"
-		}
-	]
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Shipping Quote Extractor API",
+    "description": "Complete Postman collection for testing the Shipping Quote Email Extractor Express.js API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "12345678"
+  },
+  "item": [
+    {
+      "name": "Health & Testing",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "health"]
+            },
+            "description": "Check if the API and database are operational"
+          },
+          "response": []
+        },
+        {
+          "name": "Test Microsoft Graph Connection",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/test/graph",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "test", "graph"]
+            },
+            "description": "Test connection to Microsoft Graph API"
+          },
+          "response": []
+        },
+        {
+          "name": "Test Claude API Connection",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/test/claude",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "test", "claude"]
+            },
+            "description": "Test connection to Anthropic Claude API"
+          },
+          "response": []
+        },
+        {
+          "name": "Test Database Connection",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/test/database",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "test", "database"]
+            },
+            "description": "Test connection to PostgreSQL database"
+          },
+          "response": []
+        },
+        {
+          "name": "Get API Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": ["{{baseUrl}}"]
+            },
+            "description": "Get API information and available endpoints"
+          },
+          "response": []
+        }
+      ],
+      "description": "Health checks and connection tests"
+    },
+    {
+      "name": "Email Processing",
+      "item": [
+        {
+          "name": "Process Emails - Filtering",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchQuery\": \"quote OR shipping OR freight OR cargo\",\n  \"maxEmails\": 10,\n  \"startDate\": null,\n  \"scoreThreshold\": 30,\n  \"previewMode\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/emails/process",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "emails", "process"]
+            },
+            "description": "Process emails with  pre-filtering to reduce Claude API costs"
+          },
+          "response": []
+        },
+        {
+          "name": "Preview Emails (No Processing)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchQuery\": \"quote OR shipping OR freight\",\n  \"maxEmails\": 20,\n  \"startDate\": null,\n  \"scoreThreshold\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/emails/preview",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "emails", "preview"]
+            },
+            "description": "Preview which emails would be processed without actually processing them"
+          },
+          "response": []
+        },
+        {
+          "name": "Fetch Raw Emails from M365",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchQuery\": \"quote OR shipping\",\n  \"maxEmails\": 10,\n  \"startDate\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/emails/fetch",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "emails", "fetch"]
+            },
+            "description": "Fetch raw emails from Microsoft 365 without processing"
+          },
+          "response": []
+        },
+        {
+          "name": "Parse Single Email with Claude",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": {\n    \"id\": \"test-email-id-123\",\n    \"subject\": \"Quote Request - Shipping from NYC to LA\",\n    \"body\": {\n      \"content\": \"Hi, I need a quote for shipping 3 pallets from New York City to Los Angeles. Total weight is approximately 500 lbs. Need delivery by next week. Please advise pricing. Thanks, John Doe, Acme Corp, john@acmecorp.com, 555-1234\"\n    },\n    \"from\": {\n      \"emailAddress\": {\n        \"name\": \"John Doe\",\n        \"address\": \"john@acmecorp.com\"\n      }\n    },\n    \"receivedDateTime\": \"2024-11-18T10:30:00Z\",\n    \"bodyPreview\": \"Hi, I need a quote for shipping 3 pallets...\",\n    \"hasAttachments\": false\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/emails/parse",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "emails", "parse"]
+            },
+            "description": "Parse a single email with Claude AI (useful for testing)"
+          },
+          "response": []
+        }
+      ],
+      "description": "Email fetching and processing endpoints"
+    },
+    {
+      "name": "Quote Management",
+      "item": [
+        {
+          "name": "Get All Quotes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Get all quotes with pagination"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Quote by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "Quote ID"
+                }
+              ]
+            },
+            "description": "Get a specific quote by its ID"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Quotes - By Company",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientCompanyName\": \"Acme\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes", "search"]
+            },
+            "description": "Search quotes by company name"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Quotes - By Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quoteStatus\": \"Pending\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes", "search"]
+            },
+            "description": "Search quotes by status (Pending, Approved, Rejected, Expired)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Quotes - By Date Range",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"startDate\": \"2024-01-01\",\n  \"endDate\": \"2024-12-31\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes", "search"]
+            },
+            "description": "Search quotes within a date range"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Quotes - Advanced",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientCompanyName\": \"Acme\",\n  \"quoteStatus\": \"Pending\",\n  \"startDate\": \"2024-01-01\",\n  \"endDate\": \"2024-12-31\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes", "search"]
+            },
+            "description": "Search quotes with multiple criteria"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Quote",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/quotes/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quotes", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "Quote ID to delete"
+                }
+              ]
+            },
+            "description": "Delete a quote by its ID"
+          },
+          "response": []
+        }
+      ],
+      "description": "Quote retrieval, search, and management"
+    },
+    {
+      "name": "Statistics",
+      "item": [
+        {
+          "name": "Get Processing Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "stats"]
+            },
+            "description": "Get statistics about processed emails and quotes"
+          },
+          "response": []
+        }
+      ],
+      "description": "Statistics and analytics endpoints"
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    }
+  ]
 }

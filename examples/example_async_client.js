@@ -23,7 +23,7 @@ async function processEmailsAsync() {
       maxEmails: 20,
       scoreThreshold: 30,
       previewMode: false,
-      async: true  // Enable async processing
+      async: true, // Enable async processing
     });
 
     const { jobId, statusUrl, message } = submitResponse.data;
@@ -40,7 +40,7 @@ async function processEmailsAsync() {
 
     while (!completed && attempts < maxAttempts) {
       attempts++;
-      
+
       // Wait before polling
       await sleep(5000); // 5 seconds
 
@@ -50,7 +50,9 @@ async function processEmailsAsync() {
 
         // Display progress
         const progressBar = createProgressBar(status.progress.percentage);
-        process.stdout.write(`\r[${progressBar}] ${status.progress.percentage}% - Status: ${status.status}`);
+        process.stdout.write(
+          `\r[${progressBar}] ${status.progress.percentage}% - Status: ${status.status}`
+        );
 
         if (status.status === 'completed') {
           console.log('\n\n✓ Job completed successfully!');
@@ -62,7 +64,7 @@ async function processEmailsAsync() {
           console.log(`  Skipped (already in DB): ${status.result.processed.skipped}`);
           console.log(`  Failed: ${status.result.processed.failed}`);
           console.log(`  Duration: ${status.duration}`);
-          
+
           if (status.result.estimatedCost) {
             console.log(`\n  💰 Estimated cost: $${status.result.estimatedCost.toFixed(2)}`);
             console.log(`  💾 Money saved: $${status.result.estimatedSavings.toFixed(2)}`);
@@ -90,7 +92,6 @@ async function processEmailsAsync() {
     }
 
     console.log('\n' + '='.repeat(60) + '\n');
-
   } catch (error) {
     if (error.response?.status === 429) {
       console.error('\n✗ Rate limit exceeded!');
@@ -122,7 +123,7 @@ async function testRateLimit() {
       const response = await axios.post(`${API_BASE_URL}/emails/process`, {
         searchQuery: 'test',
         maxEmails: 5,
-        async: true
+        async: true,
       });
       console.log(`  ✓ Job accepted: ${response.data.jobId}\n`);
     } catch (error) {
@@ -202,7 +203,7 @@ function createProgressBar(percentage, width = 40) {
  * Helper: Sleep for specified milliseconds
  */
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Main execution

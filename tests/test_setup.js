@@ -103,7 +103,7 @@ async function runTests() {
   try {
     const emails = await microsoftGraphService.fetchEmails({
       searchQuery: 'quote OR shipping',
-      top: 3
+      top: 3,
     });
 
     if (emails && emails.length > 0) {
@@ -155,7 +155,7 @@ async function runTests() {
 }
 
 // Run tests
-runTests().catch(error => {
+runTests().catch((error) => {
   console.error('Fatal error during testing:', error);
   process.exit(1);
 });

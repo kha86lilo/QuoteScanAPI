@@ -5,9 +5,11 @@ This folder contains SQL migration scripts and setup tools for the database sche
 ## Migration Files
 
 ### `create_processing_jobs_table.sql`
+
 Creates the `processing_jobs` table for tracking asynchronous email processing jobs.
 
 **Columns:**
+
 - `job_id` - Unique identifier (UUID)
 - `status` - Job status (pending, processing, completed, failed)
 - `created_at`, `updated_at` - Timestamps
@@ -19,17 +21,20 @@ Creates the `processing_jobs` table for tracking asynchronous email processing j
 - `summary` - Processing summary (JSONB)
 
 ### `create_email_attachments_table.sql`
+
 Creates the `email_attachments` table for storing email attachment metadata and extracted text.
 
 ### `alter_processing_jobs_add_summary.sql`
+
 Adds the `summary` JSONB column to existing `processing_jobs` table.
 
 **Summary Structure:**
+
 ```json
 {
   "fetched": 100,
-  "filtered": {"toProcess": 30, "toSkip": 70},
-  "processed": {"successful": 25, "skipped": 3, "failed": 2},
+  "filtered": { "toProcess": 30, "toSkip": 70 },
+  "processed": { "successful": 25, "skipped": 3, "failed": 2 },
   "estimatedCost": 0.45,
   "estimatedSavings": 1.05,
   "actualCost": 0.38,
@@ -38,26 +43,41 @@ Adds the `summary` JSONB column to existing `processing_jobs` table.
 }
 ```
 
+### `alter_processing_jobs_add_last_received_datetime.sql`
+
+Adds the `last_received_datetime` TIMESTAMP column to track the maximum receivedDateTime from emails processed in each job.
+
+**Purpose:**
+
+- Enables incremental email processing
+- Allows filtering emails by date range in subsequent jobs
+- Helps avoid reprocessing the same emails
+
 ## Setup Scripts
 
 ### `setup_database.js`
+
 **Recommended** - Automated database setup script.
 
 Handles:
+
 - Creates tables if they don't exist
 - Adds summary column if missing
 - Verifies table structure
 - Idempotent (safe to run multiple times)
 
 **Run:**
+
 ```bash
 node migrations/setup_database.js
 ```
 
 ### `run_migration.js`
+
 Standalone migration runner for adding the summary column.
 
 **Run:**
+
 ```bash
 node migrations/run_migration.js
 ```
@@ -94,8 +114,10 @@ psql -h <host> -U <user> -d <database> -f migrations/alter_processing_jobs_add_s
 1. `create_processing_jobs_table.sql` - Create base table
 2. `create_email_attachments_table.sql` - Create attachments table
 3. `alter_processing_jobs_add_summary.sql` - Add summary column
+4. `alter_processing_jobs_add_last_received_datetime.sql` - Add last received datetime tracking
 
 Or simply run:
+
 ```bash
 node migrations/setup_database.js
 ```
@@ -106,24 +128,28 @@ After running migrations:
 
 ```sql
 -- Verify processing_jobs table
-SELECT column_name, data_type 
-FROM information_schema.columns 
+SELECT column_name, data_type
+FROM information_schema.columns
 WHERE table_name = 'processing_jobs';
 
 -- Check if summary column exists
 SELECT EXISTS (
-  SELECT FROM information_schema.columns 
-  WHERE table_name = 'processing_jobs' 
+  SELECT FROM information_schema.columns
+  WHERE table_name = 'processing_jobs'
   AND column_name = 'summary'
 );
 ```
 
 ## Rollback
 
-To remove the summary column (not recommended):
+To remove columns (not recommended):
 
 ```sql
+-- Remove summary column
 ALTER TABLE processing_jobs DROP COLUMN IF EXISTS summary;
+
+-- Remove last_received_datetime column
+ALTER TABLE processing_jobs DROP COLUMN IF EXISTS last_received_datetime;
 ```
 
 ## Environment Variables
