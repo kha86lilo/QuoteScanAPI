@@ -69,84 +69,92 @@ ${bodyContent}
   getExtractionPrompt(emailContent) {
     return `You are an expert data extraction assistant for Seahorse Express, a shipping and 3PL logistics company. 
 
-Extract shipping quote information from this customer email and return it as a JSON object. Extract as much information as possible, but if a field is not mentioned in the email, set it to null.
+Extract shipping quote information from this customer email and return it as a JSON object. This email may contain MULTIPLE shipping quotes/requests. Extract as much information as possible, but if a field is not mentioned in the email, set it to null.
 
 Email to parse:
 ${emailContent}
 
-Return a JSON object with these exact fields (use null for missing data):
+Return a JSON object with this structure:
 
 {
-  "client_company_name": "Company name",
-  "contact_person_name": "Contact person",
-  "email_address": "email@example.com",
-  "phone_number": "Phone",
-  "company_address": "Full address",
-  "client_type": "New or Existing",
-  "industry_business_type": "Industry type",
-  
-  "origin_full_address": "Pickup address",
-  "origin_city": "City",
-  "origin_state_province": "State/Province",
-  "origin_country": "Country",
-  "origin_postal_code": "Postal code",
-  "requested_pickup_date": "YYYY-MM-DD or null",
-  "pickup_special_requirements": "Special requirements",
-  
-  "destination_full_address": "Delivery address",
-  "destination_city": "City",
-  "destination_state_province": "State/Province",
-  "destination_country": "Country",
-  "destination_postal_code": "Postal code",
-  "requested_delivery_date": "YYYY-MM-DD or null",
-  "delivery_special_requirements": "Special requirements",
-  
-  "cargo_length": 0.0,
-  "cargo_width": 0.0,
-  "cargo_height": 0.0,
-  "dimension_unit": "Meters/Feet/Inches/CM",
-  "cargo_weight": 0.0,
-  "weight_unit": "KG/Tonnes/Pounds/LBS",
-  "number_of_pieces": 0,
-  "cargo_description": "Description",
-  "hazardous_material": false,
-  "declared_value": 0.0,
-  "packaging_type": "Type",
-  
-  "service_type": "Air/Ocean/Ground/Rail/Intermodal",
-  "service_level": "Express/Standard/Economy",
-  "incoterms": "FOB/CIF/DDP/EXW/etc",
-  "insurance_required": false,
-  "customs_clearance_needed": false,
-  "transit_time_quoted": 0,
-  
-  "quote_date": "YYYY-MM-DD or null",
-  "initial_quote_amount": 0.0,
-  "revised_quote_1": null,
-  "revised_quote_2": null,
-  "discount_given": 0.0,
-  "discount_reason": null,
-  "final_agreed_price": null,
-  
-  "quote_status": "Pending/Approved/Rejected/Expired",
-  "job_won": null,
-  "rejection_reason": null,
-  
-  "sales_representative": "Name",
-  "lead_source": "Website/Referral/Email/Phone/etc",
-  "special_requirements": "Any special notes",
-  "urgency_level": "Rush/Standard/Flexible"
+  "client_info": {
+    "client_company_name": "Company name",
+    "contact_person_name": "Contact person",
+    "email_address": "email@example.com",
+    "phone_number": "Phone",
+    "company_address": "Full address",
+    "client_type": "New or Existing",
+    "industry_business_type": "Industry type"
+  },
+  "quotes": [
+    {
+      "origin_full_address": "Pickup address",
+      "origin_city": "City",
+      "origin_state_province": "State/Province",
+      "origin_country": "Country",
+      "origin_postal_code": "Postal code",
+      "requested_pickup_date": "YYYY-MM-DD or null",
+      "pickup_special_requirements": "Special requirements",
+      
+      "destination_full_address": "Delivery address",
+      "destination_city": "City",
+      "destination_state_province": "State/Province",
+      "destination_country": "Country",
+      "destination_postal_code": "Postal code",
+      "requested_delivery_date": "YYYY-MM-DD or null",
+      "delivery_special_requirements": "Special requirements",
+      
+      "cargo_length": 0.0,
+      "cargo_width": 0.0,
+      "cargo_height": 0.0,
+      "dimension_unit": "Meters/Feet/Inches/CM",
+      "cargo_weight": 0.0,
+      "weight_unit": "KG/Tonnes/Pounds/LBS",
+      "number_of_pieces": 0,
+      "cargo_description": "Description",
+      "hazardous_material": false,
+      "declared_value": 0.0,
+      "packaging_type": "Type",
+      
+      "service_type": "Air/Ocean/Ground/Rail/Intermodal",
+      "service_level": "Express/Standard/Economy",
+      "incoterms": "FOB/CIF/DDP/EXW/etc",
+      "insurance_required": false,
+      "customs_clearance_needed": false,
+      "transit_time_quoted": 0,
+      
+      "quote_date": "YYYY-MM-DD or null",
+      "initial_quote_amount": 0.0,
+      "revised_quote_1": null,
+      "revised_quote_2": null,
+      "discount_given": 0.0,
+      "discount_reason": null,
+      "final_agreed_price": null,
+      
+      "quote_status": "Pending/Approved/Rejected/Expired",
+      "job_won": null,
+      "rejection_reason": null,
+      
+      "sales_representative": "Name",
+      "lead_source": "Website/Referral/Email/Phone/etc",
+      "special_requirements": "Any special notes",
+      "urgency_level": "Rush/Standard/Flexible"
+    }
+  ]
 }
 
 IMPORTANT: 
 - Return ONLY valid JSON, no markdown code blocks, no other text
 - Do not wrap the JSON in \`\`\`json or \`\`\` tags
 - Start directly with { and end with }
+- If the email contains multiple shipments/quotes, create multiple objects in the "quotes" array
+- Each quote in the array should have all the fields listed above
+- The "client_info" should be extracted once and shared across all quotes
 - Use null for any field not found in the email
 - Convert all amounts to USD if currency is mentioned
 - Standardize dates to YYYY-MM-DD format
 - Extract numeric values only (no units in number fields)
-- Be thorough and extract every detail mentioned`;
+- Be thorough and extract every detail mentioned for each quote`;
   }
 
   /**
@@ -172,15 +180,36 @@ IMPORTANT:
 
   /**
    * Calculate confidence score based on filled fields
-   * @param {Object} parsedData - Parsed quote data
+   * @param {Object} parsedData - Parsed quote data with client_info and quotes array
    * @returns {number} Confidence score (0.0 to 1.0)
    */
   calculateConfidence(parsedData) {
-    const totalFields = Object.keys(parsedData).length;
-    const filledFields = Object.values(parsedData).filter(
+    if (!parsedData || !parsedData.quotes || parsedData.quotes.length === 0) {
+      return 0.0;
+    }
+
+    // Calculate average confidence across all quotes
+    let totalConfidence = 0;
+    
+    // Count client_info fields
+    const clientFields = Object.keys(parsedData.client_info || {}).length;
+    const filledClientFields = Object.values(parsedData.client_info || {}).filter(
       (v) => v !== null && v !== '' && v !== 0
     ).length;
-    return totalFields > 0 ? parseFloat((filledFields / totalFields).toFixed(2)) : 0.0;
+
+    for (const quote of parsedData.quotes) {
+      const quoteFields = Object.keys(quote).length;
+      const filledQuoteFields = Object.values(quote).filter(
+        (v) => v !== null && v !== '' && v !== 0
+      ).length;
+      
+      const totalFields = clientFields + quoteFields;
+      const filledFields = filledClientFields + filledQuoteFields;
+      
+      totalConfidence += totalFields > 0 ? filledFields / totalFields : 0;
+    }
+
+    return parseFloat((totalConfidence / parsedData.quotes.length).toFixed(2));
   }
 
   /**

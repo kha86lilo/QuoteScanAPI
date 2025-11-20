@@ -151,9 +151,21 @@ class EmailExtractorService {
             continue;
           }
 
-          // Save to database
-          await db.saveQuoteToDatabase(email, parsedData);
-          console.log(`  ✓ Saved to database`);
+          // Validate parsed data structure
+          if (!parsedData.quotes || parsedData.quotes.length === 0) {
+            console.log(`  ⚠ No quotes extracted from email`);
+            results.processed.failed++;
+            results.errors.push({
+              emailId: email.id,
+              subject: email.subject,
+              error: 'No quotes found in parsed data',
+            });
+            continue;
+          }
+
+          // Save to database (handles multiple quotes)
+          const saveResult = await db.saveQuoteToDatabase(email, parsedData);
+          console.log(`  ✓ Saved ${saveResult.quotes_count} quote(s) to database`);
           results.processed.successful++;
         } catch (error) {
           console.error(`  ✗ Error processing email:`, error.message);

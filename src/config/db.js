@@ -54,15 +54,20 @@ async function checkEmailExists(messageId) {
 /**
  * Save parsed quote data to database
  * @param {Object} email - Raw email data from Microsoft Graph
- * @param {Object} parsedData - Parsed data from Claude AI
+ * @param {Object} parsedData - Parsed data with client_info and quotes array
  * @param {string} jobId - Optional job ID to associate with the email
- * @returns {Promise<Object>} - Database insert result with email_id and quote_id
+ * @returns {Promise<Object>} - Database insert result with email_id and quote_ids array
  */
 async function saveQuoteToDatabase(email, parsedData, jobId = null) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
+
+    // Validate parsedData structure
+    if (!parsedData || !parsedData.quotes || parsedData.quotes.length === 0) {
+      throw new Error('No quotes found in parsed data');
+    }
 
     // Step 1: Insert or get existing email record
     const emailQuery = `
@@ -95,7 +100,7 @@ async function saveQuoteToDatabase(email, parsedData, jobId = null) {
     const emailResult = await client.query(emailQuery, emailValues);
     const emailId = emailResult.rows[0].email_id;
 
-    // Step 2: Insert quote record linked to the email
+    // Step 2: Insert all quotes from the email
     const quoteQuery = `
       INSERT INTO shipping_quotes (
         email_id,
@@ -129,69 +134,79 @@ async function saveQuoteToDatabase(email, parsedData, jobId = null) {
       ) RETURNING quote_id
     `;
 
-    const quoteValues = [
-      emailId,
-      parsedData.client_company_name,
-      parsedData.contact_person_name,
-      parsedData.email_address,
-      parsedData.phone_number,
-      parsedData.company_address,
-      parsedData.client_type,
-      parsedData.industry_business_type,
-      parsedData.origin_full_address,
-      parsedData.origin_city,
-      parsedData.origin_state_province,
-      parsedData.origin_country,
-      parsedData.origin_postal_code,
-      parsedData.requested_pickup_date,
-      parsedData.pickup_special_requirements,
-      parsedData.destination_full_address,
-      parsedData.destination_city,
-      parsedData.destination_state_province,
-      parsedData.destination_country,
-      parsedData.destination_postal_code,
-      parsedData.requested_delivery_date,
-      parsedData.delivery_special_requirements,
-      parsedData.cargo_length,
-      parsedData.cargo_width,
-      parsedData.cargo_height,
-      parsedData.dimension_unit,
-      parsedData.cargo_weight,
-      parsedData.weight_unit,
-      parsedData.number_of_pieces,
-      parsedData.cargo_description,
-      parsedData.hazardous_material,
-      parsedData.declared_value,
-      parsedData.packaging_type,
-      parsedData.service_type,
-      parsedData.service_level,
-      parsedData.incoterms,
-      parsedData.insurance_required,
-      parsedData.customs_clearance_needed,
-      parsedData.transit_time_quoted,
-      parsedData.quote_date,
-      parsedData.initial_quote_amount,
-      parsedData.revised_quote_1,
-      parsedData.revised_quote_2,
-      parsedData.discount_given,
-      parsedData.discount_reason,
-      parsedData.final_agreed_price,
-      parsedData.quote_status,
-      parsedData.job_won,
-      parsedData.rejection_reason,
-      parsedData.sales_representative,
-      parsedData.lead_source,
-      parsedData.special_requirements,
-      parsedData.urgency_level,
-    ];
+    const quoteIds = [];
+    const clientInfo = parsedData.client_info || {};
 
-    const quoteResult = await client.query(quoteQuery, quoteValues);
+    // Insert each quote
+    for (let i = 0; i < parsedData.quotes.length; i++) {
+      const quote = parsedData.quotes[i];
+      
+      const quoteValues = [
+        emailId,
+        clientInfo.client_company_name,
+        clientInfo.contact_person_name,
+        clientInfo.email_address,
+        clientInfo.phone_number,
+        clientInfo.company_address,
+        clientInfo.client_type,
+        clientInfo.industry_business_type,
+        quote.origin_full_address,
+        quote.origin_city,
+        quote.origin_state_province,
+        quote.origin_country,
+        quote.origin_postal_code,
+        quote.requested_pickup_date,
+        quote.pickup_special_requirements,
+        quote.destination_full_address,
+        quote.destination_city,
+        quote.destination_state_province,
+        quote.destination_country,
+        quote.destination_postal_code,
+        quote.requested_delivery_date,
+        quote.delivery_special_requirements,
+        quote.cargo_length,
+        quote.cargo_width,
+        quote.cargo_height,
+        quote.dimension_unit,
+        quote.cargo_weight,
+        quote.weight_unit,
+        quote.number_of_pieces,
+        quote.cargo_description,
+        quote.hazardous_material,
+        quote.declared_value,
+        quote.packaging_type,
+        quote.service_type,
+        quote.service_level,
+        quote.incoterms,
+        quote.insurance_required,
+        quote.customs_clearance_needed,
+        quote.transit_time_quoted,
+        quote.quote_date,
+        quote.initial_quote_amount,
+        quote.revised_quote_1,
+        quote.revised_quote_2,
+        quote.discount_given,
+        quote.discount_reason,
+        quote.final_agreed_price,
+        quote.quote_status,
+        quote.job_won,
+        quote.rejection_reason,
+        quote.sales_representative,
+        quote.lead_source,
+        quote.special_requirements,
+        quote.urgency_level,
+      ];
+
+      const quoteResult = await client.query(quoteQuery, quoteValues);
+      quoteIds.push(quoteResult.rows[0].quote_id);
+    }
 
     await client.query('COMMIT');
 
     return {
       email_id: emailId,
-      quote_id: quoteResult.rows[0].quote_id,
+      quote_ids: quoteIds,
+      quotes_count: quoteIds.length,
     };
   } catch (error) {
     await client.query('ROLLBACK');
