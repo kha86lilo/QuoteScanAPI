@@ -78,15 +78,15 @@ export const processEmails = asyncHandler(async (req, res) => {
  * Process only new emails since last processing job
  * Automatically uses the lastReceivedDateTime from the most recent completed job
  */
-export const processNewEntries = asyncHandler(async (req, res) => {
+export const processNewEmails = asyncHandler(async (req, res) => {
   // Get the latest lastReceivedDateTime from completed jobs
   const startDate = await getLatestLastReceivedDateTime();
 
   // Build job data with incremental processing parameters
   const jobData = {
-    searchQuery: '',
-    maxEmails: 1000,
-    startDate: startDate,
+    searchQuery: 'quote OR shipping OR freight OR cargo',
+    maxEmails: 100,
+    startDate: startDate ?? new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     scoreThreshold: 30,
     previewMode: false,
   };

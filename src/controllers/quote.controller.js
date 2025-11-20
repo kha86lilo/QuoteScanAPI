@@ -15,8 +15,22 @@ export const getAllQuotes = asyncHandler(async (req, res) => {
 
   try {
     const result = await db.pool.query(
-      `SELECT * FROM shipping_quotes 
-       ORDER BY processed_at DESC 
+      `SELECT 
+         q.*,
+         e.email_message_id,
+         e.email_subject,
+         e.email_received_date,
+         e.email_sender_name,
+         e.email_sender_email,
+         e.email_body_preview,
+         e.email_has_attachments,
+         e.raw_email_body,
+         e.processed_at,
+         e.ai_confidence_score,
+         e.job_id
+       FROM shipping_quotes q
+       INNER JOIN shipping_emails e ON q.email_id = e.email_id
+       ORDER BY q.created_at DESC 
        LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
@@ -46,7 +60,25 @@ export const getQuoteById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await db.pool.query('SELECT * FROM shipping_quotes WHERE quote_id = $1', [id]);
+    const result = await db.pool.query(
+      `SELECT 
+         q.*,
+         e.email_message_id,
+         e.email_subject,
+         e.email_received_date,
+         e.email_sender_name,
+         e.email_sender_email,
+         e.email_body_preview,
+         e.email_has_attachments,
+         e.raw_email_body,
+         e.processed_at,
+         e.ai_confidence_score,
+         e.job_id
+       FROM shipping_quotes q
+       INNER JOIN shipping_emails e ON q.email_id = e.email_id
+       WHERE q.quote_id = $1`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       throw new NotFoundError(`Quote with ID: ${id}`);
@@ -66,37 +98,60 @@ export const getQuoteById = asyncHandler(async (req, res) => {
  * Search quotes by criteria
  */
 export const searchQuotes = asyncHandler(async (req, res) => {
-  const { clientCompanyName, quoteStatus, startDate, endDate } = req.body;
+  const { clientCompanyName, quoteStatus, startDate, endDate, senderEmail } = req.body;
 
-  let query = 'SELECT * FROM shipping_quotes WHERE 1=1';
+  let query = `
+    SELECT 
+      q.*,
+      e.email_message_id,
+      e.email_subject,
+      e.email_received_date,
+      e.email_sender_name,
+      e.email_sender_email,
+      e.email_body_preview,
+      e.email_has_attachments,
+      e.raw_email_body,
+      e.processed_at,
+      e.ai_confidence_score,
+      e.job_id
+    FROM shipping_quotes q
+    INNER JOIN shipping_emails e ON q.email_id = e.email_id
+    WHERE 1=1
+  `;
   const params = [];
   let paramIndex = 1;
 
   if (clientCompanyName) {
-    query += ` AND client_company_name ILIKE $${paramIndex}`;
+    query += ` AND q.client_company_name ILIKE $${paramIndex}`;
     params.push(`%${clientCompanyName}%`);
     paramIndex++;
   }
 
   if (quoteStatus) {
-    query += ` AND quote_status = $${paramIndex}`;
+    query += ` AND q.quote_status = $${paramIndex}`;
     params.push(quoteStatus);
     paramIndex++;
   }
 
+  if (senderEmail) {
+    query += ` AND e.email_sender_email ILIKE $${paramIndex}`;
+    params.push(`%${senderEmail}%`);
+    paramIndex++;
+  }
+
   if (startDate) {
-    query += ` AND processed_at >= $${paramIndex}`;
+    query += ` AND q.created_at >= $${paramIndex}`;
     params.push(startDate);
     paramIndex++;
   }
 
   if (endDate) {
-    query += ` AND processed_at <= $${paramIndex}`;
+    query += ` AND q.created_at <= $${paramIndex}`;
     params.push(endDate);
     paramIndex++;
   }
 
-  query += ' ORDER BY processed_at DESC LIMIT 100';
+  query += ' ORDER BY q.created_at DESC LIMIT 100';
 
   try {
     const result = await db.pool.query(query, params);

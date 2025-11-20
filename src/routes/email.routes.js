@@ -22,7 +22,7 @@ router.post('/process', emailProcessingLimiter, emailController.processEmails);
  * Automatically uses lastReceivedDateTime from most recent completed job
  * Rate limited to 1 request per minute
  */
-router.post('/processnewentries', emailProcessingLimiter, emailController.processNewEntries);
+router.post('/processnewemails', emailProcessingLimiter, emailController.processNewEmails);
 
 /**
  * Preview emails that would be processed

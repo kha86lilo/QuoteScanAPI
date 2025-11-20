@@ -45,10 +45,6 @@ export const getJobStatus = asyncHandler(async (req, res) => {
   // Add results if completed
   if (job.status === 'completed') {
     response.result = job.result;
-    // Include summary separately for easy access
-    if (job.summary) {
-      response.summary = job.summary;
-    }
   }
 
   // Add error if failed
@@ -98,7 +94,6 @@ export const getAllJobs = asyncHandler(async (req, res) => {
       startedAt: job.startedAt,
       completedAt: job.completedAt,
       progress: job.progress,
-      summary: job.summary || null,
     })),
   });
 });

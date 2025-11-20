@@ -41,7 +41,7 @@ class JobProcessor {
     this.jobs.set(jobId, job);
 
     // Also save to database
-    this.saveJobToDatabase(job).catch((err) => {
+    db.saveJobToDatabase(job).catch((err) => {
       console.error('Error saving job to database:', err);
     });
 
@@ -61,7 +61,7 @@ class JobProcessor {
 
     // Try database
     try {
-      const job = await this.getJobFromDatabase(jobId);
+      const job = await db.getJobFromDatabase(jobId);
       if (job) {
         // Cache it in memory
         this.jobs.set(jobId, job);
@@ -88,10 +88,7 @@ class JobProcessor {
       updatedAt: new Date().toISOString(),
     });
 
-    // Extract summary if present in result
-    if (updates.result && updates.result.summary) {
-      job.summary = updates.result.summary;
-    }
+    
 
     // Extract lastReceivedDateTime if present in result
     if (updates.result && updates.result.lastReceivedDateTime) {
@@ -101,7 +98,7 @@ class JobProcessor {
     this.jobs.set(jobId, job);
 
     // Update database
-    await this.updateJobInDatabase(job).catch((err) => {
+    await db.updateJobInDatabase(job).catch((err) => {
       console.error('Error updating job in database:', err);
     });
   }
@@ -132,7 +129,10 @@ class JobProcessor {
       await this.updateJob(jobId, {
         status: 'completed',
         completedAt: new Date().toISOString(),
-        result: result,
+        result: {
+          ...result,
+          preview: undefined
+        },
         progress: {
           current: result.fetched,
           total: result.fetched,
@@ -182,8 +182,7 @@ class JobProcessor {
   }
 
   /**
-   * Clean up old jobs (older than specified days)
-   * Removes from in-memory cache but preserves database records with summary data
+   * Clean up old jobs (older than specified days) 
    * @param {number} daysOld - Number of days
    */
   async cleanupOldJobs(daysOld = 7) {
@@ -199,8 +198,7 @@ class JobProcessor {
         this.jobs.delete(jobId);
         removedFromMemory++;
 
-        // Database records are preserved - do NOT delete from database
-        // This preserves historical summary data for analytics
+        // Database records are preserved - do NOT delete from database 
       }
     }
 
@@ -212,148 +210,12 @@ class JobProcessor {
   }
 
   /**
-   * Save job to database
-   * @param {Object} job - Job object
-   */
-  async saveJobToDatabase(job) {
-    const client = await db.pool.connect();
-    try {
-      await client.query(
-        `
-        INSERT INTO processing_jobs (
-          job_id, status, created_at, updated_at, started_at, 
-          completed_at, job_data, result, error, progress, summary, last_received_datetime
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      `,
-        [
-          job.id,
-          job.status,
-          job.createdAt,
-          job.updatedAt,
-          job.startedAt,
-          job.completedAt,
-          JSON.stringify(job.data),
-          JSON.stringify(job.result),
-          JSON.stringify(job.error),
-          JSON.stringify(job.progress),
-          JSON.stringify(job.summary || null),
-          job.lastReceivedDateTime,
-        ]
-      );
-    } finally {
-      client.release();
-    }
-  }
-
-  /**
-   * Get job from database
-   * @param {string} jobId - Job ID
-   * @returns {Object|null} - Job object or null
-   */
-  async getJobFromDatabase(jobId) {
-    const client = await db.pool.connect();
-    try {
-      const result = await client.query('SELECT * FROM processing_jobs WHERE job_id = $1', [jobId]);
-
-      if (result.rows.length === 0) {
-        return null;
-      }
-
-      const row = result.rows[0];
-      return {
-        id: row.job_id,
-        status: row.status,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        startedAt: row.started_at,
-        completedAt: row.completed_at,
-        data: row.job_data,
-        result: row.result,
-        error: row.error,
-        progress: row.progress,
-        summary: row.summary,
-        lastReceivedDateTime: row.last_received_datetime,
-      };
-    } finally {
-      client.release();
-    }
-  }
-
-  /**
-   * Update job in database
-   * @param {Object} job - Job object
-   */
-  async updateJobInDatabase(job) {
-    const client = await db.pool.connect();
-    try {
-      await client.query(
-        `
-        UPDATE processing_jobs 
-        SET status = $2, updated_at = $3, started_at = $4, 
-            completed_at = $5, result = $6, error = $7, progress = $8, summary = $9, last_received_datetime = $10
-        WHERE job_id = $1
-      `,
-        [
-          job.id,
-          job.status,
-          job.updatedAt,
-          job.startedAt,
-          job.completedAt,
-          JSON.stringify(job.result),
-          JSON.stringify(job.error),
-          JSON.stringify(job.progress),
-          JSON.stringify(job.summary || null),
-          job.lastReceivedDateTime,
-        ]
-      );
-    } finally {
-      client.release();
-    }
-  }
-
-  /**
-   * Get job statistics from database
+   * Get job statistics
    * @param {Object} filters - Optional filters (e.g., date range, status)
    * @returns {Promise<Object>} - Aggregated statistics
    */
   async getJobStatistics(filters = {}) {
-    const client = await db.pool.connect();
-    try {
-      let whereClause = '';
-      const params = [];
-
-      if (filters.startDate) {
-        params.push(filters.startDate);
-        whereClause = `WHERE created_at >= $${params.length}`;
-      }
-
-      if (filters.endDate) {
-        params.push(filters.endDate);
-        whereClause += whereClause
-          ? ` AND created_at <= $${params.length}`
-          : `WHERE created_at <= $${params.length}`;
-      }
-
-      const result = await client.query(
-        `
-        SELECT 
-          COUNT(*) as total_jobs,
-          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_jobs,
-          COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_jobs,
-          SUM((summary->>'fetched')::int) as total_emails_fetched,
-          SUM((summary->'processed'->>'successful')::int) as total_emails_processed,
-          SUM((summary->>'actualCost')::numeric) as total_cost,
-          SUM((summary->>'estimatedSavings')::numeric) as total_savings
-        FROM processing_jobs
-        ${whereClause}
-      `,
-        params
-      );
-
-      return result.rows[0];
-    } finally {
-      client.release();
-    }
+    return db.getJobStatistics(filters);
   }
 }
 

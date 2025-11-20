@@ -78,7 +78,7 @@ class MicrosoftGraphService {
       $search: `"${searchQuery}"`,
       $top: top,
       $select: 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
-      '?$orderby': 'receivedDateTime DESC',
+      '?$orderby': 'receivedDateTime',
     };
 
     // Add date filter if provided
@@ -185,7 +185,7 @@ class MicrosoftGraphService {
     const params = {
       $top: filters.top || 100,
       $select: 'id,subject,from,receivedDateTime,bodyPreview,hasAttachments',
-      $orderby: 'receivedDateTime DESC',
+      $orderby: 'receivedDateTime',
     };
 
     if (filters.searchQuery) {
