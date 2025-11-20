@@ -7,6 +7,7 @@ import express from 'express';
 import emailRoutes from './email.routes.js';
 import quoteRoutes from './quote.routes.js';
 import healthRoutes from './health.routes.js';
+import jobRoutes from './job.routes.js';
 
 const router = express.Router();
 
@@ -14,5 +15,6 @@ const router = express.Router();
 router.use('/emails', emailRoutes);
 router.use('/quotes', quoteRoutes);
 router.use('/health', healthRoutes);
+router.use('/jobs', jobRoutes);
 
 export default router;

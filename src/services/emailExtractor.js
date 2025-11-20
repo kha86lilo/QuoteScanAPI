@@ -182,13 +182,27 @@ class EmailExtractorService {
       console.log(`⊘ Skipped (already in DB): ${results.processed.skipped}`);
       console.log(`✗ Failed: ${results.processed.failed}`);
       const requestPrice = parseFloat(process.env.REQUEST_PRICE) || 0.015;
+      const actualCost = results.processed.successful * requestPrice;
       console.log(
-        `💰 Actual cost: $${(
-          results.processed.successful * requestPrice
-        ).toFixed(2)}`
+        `💰 Actual cost: $${actualCost.toFixed(2)}`
       );
       console.log(`💾 Money saved: $${results.estimatedSavings.toFixed(2)}`);
       console.log("=".repeat(60) + "\n");
+
+      // Create comprehensive summary
+      results.summary = {
+        fetched: results.fetched,
+        filtered: results.filtered,
+        processed: results.processed,
+        estimatedCost: results.estimatedCost,
+        estimatedSavings: results.estimatedSavings,
+        actualCost: actualCost,
+        aiProvider: providerInfo.current,
+        model: providerInfo.models[providerInfo.current],
+        searchQuery: searchQuery,
+        scoreThreshold: scoreThreshold,
+        completedAt: new Date().toISOString()
+      };
 
       return results;
     } catch (error) {

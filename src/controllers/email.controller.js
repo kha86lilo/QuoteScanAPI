@@ -6,9 +6,10 @@
 import * as emailExtractor from '../services/emailExtractor.js';
 import * as microsoftGraphService from '../services/microsoftGraphService.js';
 import * as claudeService from '../services/ai/claudeService.js';
+import jobProcessor from '../services/jobProcessor.js';
 
 /**
- * Process emails with filtering
+ * Process emails with filtering (async with job tracking)
  */
 export const processEmails= async (req, res) => {
   try {
@@ -17,16 +18,40 @@ export const processEmails= async (req, res) => {
       maxEmails = 50,
       startDate = null,
       scoreThreshold = 30,
-      previewMode = false
+      previewMode = false,
+      async = true // Default to async processing
     } = req.body;
 
-    const results = await emailExtractor.processEmails({
+    const jobData = {
       searchQuery,
       maxEmails,
       startDate,
       scoreThreshold,
       previewMode
-    });
+    };
+
+    // If async processing is enabled (default)
+    if (async) {
+      // Create job
+      const jobId = jobProcessor.createJob(jobData);
+      
+      // Start processing in background
+      jobProcessor.startJob(jobId);
+
+      // Return 202 Accepted with status URL
+      const statusUrl = `${req.protocol}://${req.get('host')}/api/jobs/${jobId}`;
+      
+      return res.status(202).json({
+        success: true,
+        message: 'Job accepted for processing',
+        jobId: jobId,
+        statusUrl: statusUrl,
+        statusCheckInterval: '5-10 seconds recommended'
+      });
+    }
+
+    // Synchronous processing (for backward compatibility)
+    const results = await emailExtractor.processEmails(jobData);
 
     res.json({
       success: true,

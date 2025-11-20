@@ -3,9 +3,10 @@
  * Tests database connection, Microsoft Graph API, and Claude API
  */
 
-import * as db from './src/config/db.js';
-import microsoftGraphService from './src/services/microsoftGraphService.js';
-import claudeService from './src/services/ai/claudeService.js';
+import * as db from '../src/config/db.js';
+import microsoftGraphService from '../src/services/microsoftGraphService.js';
+import claudeService from '../src/services/ai/claudeService.js';
+import geminiService from '../src/services/ai/geminiService.js';
 
 async function runTests() {
   console.log('\n' + '='.repeat(60));
@@ -117,6 +118,24 @@ async function runTests() {
     console.log('⚠ Could not fetch sample emails:', error.message);
     console.log('  (This is not critical - other tests passed)');
   }
+
+  // Test 6: Gemini API
+  console.log('Test 6: Gemini API Connection');
+  console.log('-'.repeat(60));
+  try {
+    const isValid = await geminiService.validateApiKey();
+    if (isValid) {
+      console.log('✓ Gemini API connection successful');
+      console.log('  API key is valid');
+    } else {
+      console.error('✗ Gemini API validation failed');
+      allPassed = false;
+    }
+  } catch (error) {
+    console.error('✗ Gemini API connection failed:', error.message);
+    allPassed = false;
+  }
+  console.log();
 
   // Summary
   console.log();

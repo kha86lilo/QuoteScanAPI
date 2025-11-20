@@ -34,11 +34,15 @@ app.get('/', (req, res) => {
     description: 'Express.js API for extracting shipping quotes from Microsoft 365 emails using Claude AI',
     endpoints: {
       health: 'GET /api/health',
-      processEmails: 'POST /api/emails/process',
-      processEmails: 'POST /api/emails/process',
+      processEmails: 'POST /api/emails/process (Rate Limited: 1/min)',
       previewEmails: 'POST /api/emails/preview',
       fetchEmails: 'POST /api/emails/fetch',
       parseEmail: 'POST /api/emails/parse',
+      getJobStatus: 'GET /api/jobs/:id',
+      getJobResult: 'GET /api/jobs/:id/result',
+      getJobStatistics: 'GET /api/jobs/statistics',
+      getAllJobs: 'GET /api/jobs',
+      cancelJob: 'DELETE /api/jobs/:id',
       getStats: 'GET /api/stats',
       getQuotes: 'GET /api/quotes',
       getQuoteById: 'GET /api/quotes/:id',
@@ -48,6 +52,11 @@ app.get('/', (req, res) => {
       testClaude: 'GET /api/test/claude',
       testDatabase: 'GET /api/test/database',
       testGemini: 'GET /api/test/gemini'
+    },
+    rateLimits: {
+      emailProcessing: '1 request per minute',
+      statusChecks: '30 requests per minute',
+      general: '100 requests per 15 minutes'
     },
     documentation: 'See README.md for detailed API documentation'
   });
@@ -83,10 +92,15 @@ app.listen(PORT, () => {
   console.log('Available endpoints:');
   console.log('  GET  /                              - API information');
   console.log('  GET  /api/health                    - Health check');
-  console.log('  POST /api/emails/process            - Process emails with filtering'); 
+  console.log('  POST /api/emails/process            - Process emails (async, rate limited)'); 
   console.log('  POST /api/emails/preview            - Preview emails to be processed');
   console.log('  POST /api/emails/fetch              - Fetch emails from Microsoft 365');
   console.log('  POST /api/emails/parse              - Parse a single email with Claude');
+  console.log('  GET  /api/jobs/:id                  - Get job status');
+  console.log('  GET  /api/jobs/:id/result           - Get job result');
+  console.log('  GET  /api/jobs/statistics           - Get job statistics');
+  console.log('  GET  /api/jobs                      - Get all jobs');
+  console.log('  DELETE /api/jobs/:id                - Cancel a job');
   console.log('  GET  /api/stats                     - Get processing statistics');
   console.log('  GET  /api/quotes                    - Get all quotes');
   console.log('  GET  /api/quotes/:id                - Get quote by ID');
@@ -96,7 +110,10 @@ app.listen(PORT, () => {
   console.log('  GET  /api/test/claude               - Test Claude API connection');
   console.log('  GET  /api/test/database             - Test database connection');
   console.log('  GET  /api/test/gemini               - Test Gemini API connection');
-  console.log('  GET  /api/emails/process            - Process emails without filtering');
+  console.log('\n⚡ Rate Limits:');
+  console.log('  - Email Processing: 1 request/minute');
+  console.log('  - Status Checks: 30 requests/minute');
+  console.log('  - General API: 100 requests/15 min');
   console.log('\n' + '='.repeat(60) + '\n');
 });
 

@@ -5,31 +5,33 @@
 
 import express from 'express';
 import * as emailController from '../controllers/email.controller.js';
+import { emailProcessingLimiter, generalApiLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router(); 
 
 /**
- * Process emails without filtering
+ * Process emails with rate limiting
  * POST /api/emails/process
+ * Rate limited to 1 request per minute
  */
-router.post('/process', emailController.processEmails);
+router.post('/process', emailProcessingLimiter, emailController.processEmails);
 
 /**
  * Preview emails that would be processed
  * POST /api/emails/preview
  */
-router.post('/preview', emailController.previewEmails);
+router.post('/preview', generalApiLimiter, emailController.previewEmails);
 
 /**
  * Fetch emails from Microsoft 365
  * POST /api/emails/fetch
  */
-router.post('/fetch', emailController.fetchEmails);
+router.post('/fetch', generalApiLimiter, emailController.fetchEmails);
 
 /**
  * Parse a single email with Claude
  * POST /api/emails/parse
  */
-router.post('/parse', emailController.parseEmail);
+router.post('/parse', generalApiLimiter, emailController.parseEmail);
 
 export default router;

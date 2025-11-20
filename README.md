@@ -1,1 +1,0 @@
-Transform your inbox into a revenue engine. QuoteScan API automatically discovers, extracts, and processes customer quotes from email communications, enabling seamless opportunity management and accelerated sales cycles.
