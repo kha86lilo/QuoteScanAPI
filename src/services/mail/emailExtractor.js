@@ -5,8 +5,8 @@
 
 import * as microsoftGraphService from './microsoftGraphService.js';
 import * as emailFilter from './emailFilter.js';
-import * as db from '../config/db.js';
-import { getAIService, getProviderInfo } from './ai/aiServiceFactory.js';
+import * as db from '../../config/db.js';
+import { getAIService, getProviderInfo } from '../ai/aiServiceFactory.js';
 
 class EmailExtractorService {
   /**
@@ -125,21 +125,13 @@ class EmailExtractorService {
             results.processed.skipped++;
             continue;
           }
-
-          // Try parsing email bodyPreview first
-          let parsedData = await aiService.parseEmail(email, 3, '');
-
-          // If parsing fails and email has attachments, try with attachment content
-          if (!parsedData && email.hasAttachments) {
-            console.log(`  ⚠ Initial parsing failed, processing attachments...`);
-            const { processEmailAttachments } = await import('./attachmentProcessor.js');
+          let attachmentText = ''; 
+           if (email.hasAttachments) {
+            const { processEmailAttachments } = await import('../attachmentProcessor.js');
             const attachmentResults = await processEmailAttachments(email.id);
-            const attachmentText = attachmentResults.extractedText || '';
-
-            if (attachmentText) {
-              parsedData = await aiService.parseEmail(email, 3, attachmentText);
-            }
+            attachmentText = attachmentResults.extractedText || '';
           }
+          const parsedData = await aiService.parseEmail(email, 3, attachmentText);
 
           if (!parsedData) {
             results.processed.failed++;

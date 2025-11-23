@@ -9,7 +9,7 @@ const { PDFParse } = require('pdf-parse');
 
 import ExcelJS from 'exceljs';
 import Tesseract from 'tesseract.js';
-import * as microsoftGraphService from './microsoftGraphService.js';
+import * as microsoftGraphService from './mail/microsoftGraphService.js';
 
 class AttachmentProcessor {
   constructor() {

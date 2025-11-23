@@ -4,10 +4,10 @@
  */
 
 import * as db from '../config/db.js';
-import * as microsoftGraphService from '../services/microsoftGraphService.js';
+import * as microsoftGraphService from '../services/mail/microsoftGraphService.js';
 import * as claudeService from '../services/ai/claudeService.js';
 import * as geminiService from '../services/ai/geminiService.js';
-import * as emailExtractor from '../services/emailExtractor.js';
+import * as emailExtractor from '../services/mail/emailExtractor.js';
 import { asyncHandler, ExternalServiceError, DatabaseError } from '../middleware/errorHandler.js';
 
 /**
@@ -16,7 +16,7 @@ import { asyncHandler, ExternalServiceError, DatabaseError } from '../middleware
 export const healthCheck = asyncHandler(async (req, res) => {
   try {
     // Check database connection
-    await db.pool.query('SELECT 1');
+    await db.testConnection();
 
     res.json({
       status: 'healthy',
@@ -96,12 +96,12 @@ export const testGeminiConnection = asyncHandler(async (req, res) => {
  */
 export const testDatabaseConnection = asyncHandler(async (req, res) => {
   try {
-    const result = await db.pool.query('SELECT NOW() as current_time');
+    const currentTime = await db.getCurrentTime();
 
     res.json({
       success: true,
       message: 'Database connection successful',
-      currentTime: result.rows[0].current_time,
+      currentTime,
     });
   } catch (error) {
     throw new DatabaseError('testing connection', error);

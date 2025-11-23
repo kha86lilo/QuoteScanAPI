@@ -72,20 +72,22 @@ async function saveQuoteToDatabase(email, parsedData, jobId = null) {
     // Step 1: Insert or get existing email record
     const emailQuery = `
       INSERT INTO shipping_emails (
-        email_message_id, job_id, email_subject, email_received_date,
+        email_message_id, conversation_id, job_id, email_subject, email_received_date,
         email_sender_name, email_sender_email, email_body_preview,
         email_has_attachments, processed_at, ai_confidence_score
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (email_message_id) 
       DO UPDATE SET 
         processed_at = EXCLUDED.processed_at,
         ai_confidence_score = EXCLUDED.ai_confidence_score,
-        job_id = COALESCE(EXCLUDED.job_id, shipping_emails.job_id)
+        job_id = COALESCE(EXCLUDED.job_id, shipping_emails.job_id),
+        conversation_id = EXCLUDED.conversation_id
       RETURNING email_id
     `;
 
     const emailValues = [
       email.id,
+      email.conversationId,
       jobId,
       email.subject,
       email.receivedDateTime,
@@ -488,6 +490,202 @@ async function getEmailByMessageId(messageId) {
   }
 }
 
+/**
+ * Get all quotes with pagination
+ * @param {number} limit - Number of quotes to return
+ * @param {number} offset - Number of quotes to skip
+ * @returns {Promise<Object>} - Object with quotes array and total count
+ */
+async function getAllQuotes(limit = 50, offset = 0) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT 
+         q.*,
+         e.email_message_id,
+         e.email_subject,
+         e.email_received_date,
+         e.email_sender_name,
+         e.email_sender_email,
+         e.email_body_preview,
+         e.email_has_attachments,
+         e.raw_email_body,
+         e.processed_at,
+         e.ai_confidence_score,
+         e.conversation_id,
+         e.job_id
+       FROM shipping_quotes q
+       INNER JOIN shipping_emails e ON q.email_id = e.email_id
+       ORDER BY q.created_at DESC 
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    const countResult = await client.query('SELECT COUNT(*) FROM shipping_quotes');
+    const totalCount = parseInt(countResult.rows[0].count);
+
+    return {
+      quotes: result.rows,
+      totalCount,
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get a single quote by ID
+ * @param {string} quoteId - Quote ID
+ * @returns {Promise<Object|null>} - Quote object or null
+ */
+async function getQuoteById(quoteId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT 
+         q.*,
+         e.email_message_id,
+         e.email_subject,
+         e.email_received_date,
+         e.email_sender_name,
+         e.email_sender_email,
+         e.email_body_preview,
+         e.email_has_attachments,
+         e.raw_email_body,
+         e.processed_at,
+         e.ai_confidence_score,
+         e.conversation_id,
+         e.job_id
+       FROM shipping_quotes q
+       INNER JOIN shipping_emails e ON q.email_id = e.email_id
+       WHERE q.quote_id = $1`,
+      [quoteId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Search quotes by criteria
+ * @param {Object} criteria - Search criteria
+ * @returns {Promise<Array>} - Array of matching quotes
+ */
+async function searchQuotes(criteria) {
+  const { clientCompanyName, quoteStatus, startDate, endDate, senderEmail } = criteria;
+
+  let query = `
+    SELECT 
+      q.*,
+      e.email_message_id,
+      e.email_subject,
+      e.email_received_date,
+      e.email_sender_name,
+      e.email_sender_email,
+      e.email_body_preview,
+      e.email_has_attachments,
+      e.raw_email_body,
+      e.processed_at,
+      e.ai_confidence_score,
+      e.conversation_id,
+      e.job_id
+    FROM shipping_quotes q
+    INNER JOIN shipping_emails e ON q.email_id = e.email_id
+    WHERE 1=1
+  `;
+  const params = [];
+  let paramIndex = 1;
+
+  if (clientCompanyName) {
+    query += ` AND q.client_company_name ILIKE $${paramIndex}`;
+    params.push(`%${clientCompanyName}%`);
+    paramIndex++;
+  }
+
+  if (quoteStatus) {
+    query += ` AND q.quote_status = $${paramIndex}`;
+    params.push(quoteStatus);
+    paramIndex++;
+  }
+
+  if (senderEmail) {
+    query += ` AND e.email_sender_email ILIKE $${paramIndex}`;
+    params.push(`%${senderEmail}%`);
+    paramIndex++;
+  }
+
+  if (startDate) {
+    query += ` AND q.created_at >= $${paramIndex}`;
+    params.push(startDate);
+    paramIndex++;
+  }
+
+  if (endDate) {
+    query += ` AND q.created_at <= $${paramIndex}`;
+    params.push(endDate);
+    paramIndex++;
+  }
+
+  query += ' ORDER BY q.created_at DESC LIMIT 100';
+
+  const client = await pool.connect();
+  try {
+    const result = await client.query(query, params);
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Delete a quote by ID
+ * @param {string} quoteId - Quote ID
+ * @returns {Promise<boolean>} - True if deleted, false if not found
+ */
+async function deleteQuote(quoteId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM shipping_quotes WHERE quote_id = $1 RETURNING quote_id',
+      [quoteId]
+    );
+
+    return result.rows.length > 0;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Test database connection (simple query)
+ * @returns {Promise<boolean>} - True if connection successful
+ */
+async function testConnection() {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT 1');
+    return true;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get current database time
+ * @returns {Promise<Date>} - Current database timestamp
+ */
+async function getCurrentTime() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query('SELECT NOW() as current_time');
+    return result.rows[0].current_time;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
@@ -501,4 +699,10 @@ export {
   getEmailsByJobId,
   getQuotesByEmailId,
   getEmailByMessageId,
+  getAllQuotes,
+  getQuoteById,
+  searchQuotes,
+  deleteQuote,
+  testConnection,
+  getCurrentTime,
 };

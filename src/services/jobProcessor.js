@@ -4,7 +4,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import * as emailExtractor from './emailExtractor.js';
+import * as emailExtractor from './mail/emailExtractor.js';
 import * as db from '../config/db.js';
 
 class JobProcessor {

@@ -3,8 +3,8 @@
  * Handles all email-related business logic
  */
 
-import * as emailExtractor from '../services/emailExtractor.js';
-import * as microsoftGraphService from '../services/microsoftGraphService.js';
+import * as emailExtractor from '../services/mail/emailExtractor.js';
+import * as microsoftGraphService from '../services/mail/microsoftGraphService.js';
 import * as claudeService from '../services/ai/claudeService.js';
 import jobProcessor from '../services/jobProcessor.js';
 import { getLatestLastReceivedDateTime } from '../config/db.js';
