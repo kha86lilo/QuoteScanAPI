@@ -17,9 +17,9 @@ import { asyncHandler, ValidationError } from '../middleware/errorHandler.js';
  * @param {Object} res - Express response object
  * @param {Object} options - Additional response options
  */
-const createEmailProcessingJob = (jobData, req, res, options = {}) => {
-  // Create job
-  const jobId = jobProcessor.createJob(jobData);
+const createEmailProcessingJob = async (jobData, req, res, options = {}) => {
+  // Create job (now async - persists to database first)
+  const jobId = await jobProcessor.createJob(jobData);
 
   // Start processing in background
   jobProcessor.startJob(jobId);
@@ -62,7 +62,7 @@ export const processEmails = asyncHandler(async (req, res) => {
 
   // If async processing is enabled (default)
   if (async) {
-    return createEmailProcessingJob(jobData, req, res);
+    return await createEmailProcessingJob(jobData, req, res);
   }
 
   // Synchronous processing (for backward compatibility)
@@ -91,7 +91,7 @@ export const processNewEmails = asyncHandler(async (req, res) => {
     previewMode: false,
   };
 
-  return createEmailProcessingJob(jobData, req, res, {
+  return await createEmailProcessingJob(jobData, req, res, {
     message: 'Job accepted for processing new entries',
     additionalData: {
       incrementalProcessing: {

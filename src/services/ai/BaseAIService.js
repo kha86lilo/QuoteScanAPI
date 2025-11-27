@@ -35,7 +35,14 @@ export default class BaseAIService {
     const senderName = email.from?.emailAddress?.name || '';
     const senderAddress = email.from?.emailAddress?.address || '';
     const receivedDate = email.receivedDateTime || '';
-    let bodyContent = email.bodyPreview || '';
+
+    // Use full email body if available, otherwise fall back to bodyPreview
+    let bodyContent = email.body?.content || email.bodyPreview || '';
+
+    // Strip HTML tags if body is in HTML format
+    if (email.body?.contentType === 'html') {
+      bodyContent = bodyContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+    }
 
     const MAX_BODY_CHARS = process.env.MAX_BODY_CHARS || 15000;
     if (bodyContent.length > MAX_BODY_CHARS) {
@@ -67,9 +74,90 @@ ${bodyContent}
    * @returns {string} AI prompt for data extraction
    */
   getExtractionPrompt(emailContent) {
-    return `You are an expert data extraction assistant for Seahorse Express, a shipping and 3PL logistics company. 
+    return `You are an expert data extraction assistant for Seahorse Express, a specialized shipping and 3PL logistics company focused on OVERWEIGHT and OVERSIZED cargo transport.
 
-Extract shipping quote information from this customer email and return it as a JSON object. This email may contain MULTIPLE shipping quotes/requests. Extract as much information as possible, but if a field is not mentioned in the email, set it to null.
+CRITICAL CONTEXT - READ CAREFULLY:
+You are analyzing an EMAIL THREAD which may contain multiple back-and-forth messages between the client and Seahorse Express. The thread shows the conversation history from oldest (bottom) to newest (top). You MUST:
+
+1. READ THE ENTIRE THREAD to understand the complete context
+2. Track information across multiple messages (initial request + follow-up clarifications)
+3. Identify what the client originally requested vs. what was quoted vs. what was accepted/negotiated
+4. Determine the CURRENT STATUS of each quote based on the latest communication
+5. Handle MULTIPLE QUOTES in a single thread (different services, different items, or both)
+
+INDUSTRY EXPERTISE - OVERWEIGHT/OVERSIZED TRANSPORT:
+This company specializes in overweight and oversized cargo. You must understand:
+
+TRUCK TYPES & CAPACITY:
+- Flatbed: 48-53ft, up to 48,000 lbs, for oversized/awkward cargo, no height restrictions
+- Step Deck (Stepdeck): 48-53ft, lower deck for tall cargo (up to 11.5ft), 48,000 lbs capacity
+- Double Drop (Lowboy): For extremely tall/heavy equipment, 40-53ft, clearance up to 11.6ft
+- RGN (Removable Gooseneck): Heavy equipment 40-53ft, detachable front for drive-on loading
+- Conestoga: Flatbed with retractable tarp system, weather protection, 45-53ft
+- Dry Van: Enclosed 53ft, 45,000 lbs, standard freight
+- Reefer (Refrigerated): 53ft, temperature-controlled, 42,000-44,000 lbs
+- Power Only: Tractor unit only (client provides trailer)
+- Hotshot: Smaller trucks for urgent/expedited delivery
+- Specialized Heavy Haul: For extreme overweight (80,000+ lbs) requiring permits
+
+COMMON CARGO TERMS:
+- Overweight: Exceeds 80,000 lbs (36,287 kg) total vehicle weight
+- Oversize: Width >8.5ft (2.59m), Height >13.5ft (4.11m), Length >53ft (16.15m)
+- Overdimensional (OD): Same as oversize
+- Out of Gauge (OOG): Cargo exceeding standard container dimensions
+- Break Bulk: Large cargo that doesn't fit in containers
+- Project Cargo: Specialized, complex shipments requiring planning
+- LTL (Less Than Truckload): Partial loads, multiple customers
+- FTL (Full Truckload): Dedicated truck for one customer
+- FCL (Full Container Load): Ocean freight, full 20ft/40ft container
+- LCL (Less than Container Load): Ocean freight, shared container
+- Drayage: Short-distance transport (port to warehouse)
+- Intermodal: Multiple transport modes (truck + rail + ocean)
+- Transloading: Transfer between transport modes/containers
+- Cross-docking: Transfer from inbound to outbound without storage
+
+PERMITS & REGULATIONS:
+- Wide Load Permit: Width >8.5ft
+- Overweight Permit: Exceeds state weight limits
+- Superload: Extremely large/heavy requiring special routing
+- Pilot Car (Escort): Required for oversized loads
+- Travel Restrictions: Night/weekend restrictions for oversized
+- Tarping Requirements: Securing and weather protection
+
+MEASUREMENT SYSTEMS - CRITICAL:
+Clients may use METRIC or US IMPERIAL. You MUST:
+- Identify which system is being used from context
+- Store the ORIGINAL unit as specified by the client
+- Common conversions:
+  * Weight: 1 kg = 2.20462 lbs, 1 tonne (metric ton) = 2,204.62 lbs, 1 ton (US) = 2,000 lbs
+  * Length: 1 meter = 3.28084 feet = 39.3701 inches, 1 cm = 0.3937 inches
+  * Volume: 1 cubic meter = 35.3147 cubic feet
+- NEVER convert unless client explicitly requests - store as given
+- Watch for mixed units (e.g., "10ft x 3m x 150cm")
+
+INCOTERMS (International Commercial Terms):
+- EXW (Ex Works): Buyer arranges everything from seller's location
+- FCA (Free Carrier): Seller delivers to carrier
+- FOB (Free On Board): Seller loads onto vessel
+- CIF (Cost, Insurance, Freight): Seller pays shipping + insurance to destination port
+- DDP (Delivered Duty Paid): Seller handles everything including customs
+- DAP (Delivered at Place): Seller delivers to destination, buyer handles customs
+
+EMAIL THREAD ANALYSIS:
+You will receive emails that may show:
+1. INITIAL REQUEST: Client asks for quote with (possibly incomplete) information
+2. CLARIFICATION: Seahorse asks for missing details (dimensions, weight, dates, etc.)
+3. CLIENT RESPONSE: Provides additional information
+4. QUOTE PROVIDED: Seahorse provides pricing
+5. NEGOTIATION: Client requests better pricing or modifications
+6. REVISED QUOTE: Updated pricing
+7. ACCEPTANCE/REJECTION: Client's final decision
+
+You MUST read from BOTTOM to TOP to understand chronological order and track:
+- What information was initially provided vs. clarified later
+- What was quoted and when
+- Whether pricing was negotiated (initial vs revised)
+- Current status of each quote
 
 Email to parse:
 ${emailContent}
@@ -77,84 +165,267 @@ ${emailContent}
 Return a JSON object with this structure:
 
 {
+  "email_thread_summary": {
+    "thread_type": "Initial Request/Follow-up/Quote Provided/Negotiation/Acceptance/Rejection",
+    "number_of_exchanges": 0,
+    "missing_information_requested": ["List items Seahorse asked to clarify"],
+    "conversation_summary": "Brief summary of the back-and-forth conversation"
+  },
   "client_info": {
     "client_company_name": "Company name",
     "contact_person_name": "Contact person",
+    "contact_title": "Job title if mentioned",
     "email_address": "email@example.com",
-    "phone_number": "Phone",
+    "phone_number": "Phone number",
     "company_address": "Full address",
-    "client_type": "New or Existing",
-    "industry_business_type": "Industry type"
+    "client_type": "New/Existing/Unknown",
+    "industry_business_type": "Industry type",
+    "client_location_country": "Country where client is based"
   },
   "quotes": [
     {
-      "origin_full_address": "Pickup address",
+      "quote_identifier": "Quote ID/reference number if mentioned",
+      "quote_sequence_number": 1,
+
+      "origin_full_address": "Complete pickup address",
       "origin_city": "City",
       "origin_state_province": "State/Province",
       "origin_country": "Country",
-      "origin_postal_code": "Postal code",
+      "origin_postal_code": "Postal/ZIP code",
+      "origin_facility_type": "Port/Warehouse/Manufacturing/Construction Site/etc",
       "requested_pickup_date": "YYYY-MM-DD or null",
-      "pickup_special_requirements": "Special requirements",
-      
-      "destination_full_address": "Delivery address",
+      "pickup_time_window": "Time window if specified",
+      "pickup_special_requirements": "Loading dock/forklift/crane/etc",
+
+      "destination_full_address": "Complete delivery address",
       "destination_city": "City",
       "destination_state_province": "State/Province",
       "destination_country": "Country",
-      "destination_postal_code": "Postal code",
+      "destination_postal_code": "Postal/ZIP code",
+      "destination_facility_type": "Port/Warehouse/Construction Site/etc",
       "requested_delivery_date": "YYYY-MM-DD or null",
-      "delivery_special_requirements": "Special requirements",
-      
+      "delivery_time_window": "Time window if specified",
+      "delivery_special_requirements": "Unloading requirements",
+
+      "total_distance_miles": 0.0,
+      "estimated_transit_days": 0,
+
       "cargo_length": 0.0,
       "cargo_width": 0.0,
       "cargo_height": 0.0,
-      "dimension_unit": "Meters/Feet/Inches/CM",
+      "dimension_unit": "ft/feet/in/inches/m/meters/cm/mm",
       "cargo_weight": 0.0,
-      "weight_unit": "KG/Tonnes/Pounds/LBS",
+      "weight_unit": "lbs/pounds/kg/kilograms/tonnes/tons",
       "number_of_pieces": 0,
-      "cargo_description": "Description",
+      "cargo_description": "Detailed description of cargo",
+      "cargo_type": "Machinery/Equipment/Steel/Lumber/etc",
+      "commodity_code": "HS code if mentioned",
+
+      "is_overweight": false,
+      "is_oversized": false,
+      "requires_permits": false,
+      "permit_type": "Wide Load/Overweight/Superload/null",
+      "requires_pilot_car": false,
+      "requires_tarping": false,
+      "stackable": false,
+
       "hazardous_material": false,
+      "hazmat_class": "UN classification if hazmat",
+      "hazmat_un_number": "UN number if hazmat",
+      "temperature_controlled": false,
+      "temperature_range": "Temperature range if reefer",
       "declared_value": 0.0,
-      "packaging_type": "Type",
-      
-      "service_type": "Air/Ocean/Ground/Rail/Intermodal",
-      "service_level": "Express/Standard/Economy",
-      "incoterms": "FOB/CIF/DDP/EXW/etc",
+      "declared_value_currency": "USD/CAD/EUR/etc",
+      "packaging_type": "Crate/Pallet/Skid/Flatbed/etc",
+
+      "equipment_type_requested": "Flatbed/Step Deck/RGN/Lowboy/Dry Van/Reefer/Conestoga/Power Only/etc",
+      "equipment_type_quoted": "What was actually quoted",
+      "trailer_length_required": "48ft/53ft/etc",
+      "load_type": "FTL/LTL/Partial/FCL/LCL",
+
+      "service_type": "Ground/Ocean/Air/Rail/Intermodal/Drayage",
+      "service_level": "Standard/Expedited/Rush/Economy/White Glove",
+      "incoterms": "EXW/FCA/FOB/CIF/DDP/DAP/etc or null",
       "insurance_required": false,
+      "insurance_amount": 0.0,
       "customs_clearance_needed": false,
-      "transit_time_quoted": 0,
-      
-      "quote_date": "YYYY-MM-DD or null",
+      "customs_broker": "Broker name if mentioned",
+
+      "quote_request_date": "YYYY-MM-DD when client requested",
+      "quote_provided_date": "YYYY-MM-DD when Seahorse quoted",
+      "quote_valid_until": "YYYY-MM-DD expiration",
       "initial_quote_amount": 0.0,
+      "initial_quote_currency": "USD/CAD/EUR/etc",
       "revised_quote_1": null,
+      "revised_quote_1_date": null,
       "revised_quote_2": null,
-      "discount_given": 0.0,
-      "discount_reason": null,
+      "revised_quote_2_date": null,
       "final_agreed_price": null,
-      
-      "quote_status": "Pending/Approved/Rejected/Expired",
+      "discount_given": 0.0,
+      "discount_reason": "Volume/Repeat Customer/Competitive Match/etc",
+      "additional_charges": "Fuel surcharge/Permits/Escorts/etc",
+      "payment_terms": "Net 30/COD/Prepaid/etc",
+
+      "quote_status": "Pending/Quoted/Negotiating/Accepted/Rejected/Expired/Booked",
       "job_won": null,
-      "rejection_reason": null,
-      
-      "sales_representative": "Name",
-      "lead_source": "Website/Referral/Email/Phone/etc",
-      "special_requirements": "Any special notes",
-      "urgency_level": "Rush/Standard/Flexible"
+      "acceptance_date": "YYYY-MM-DD if accepted",
+      "rejection_reason": "Price/Timeline/Service Level/Went with competitor/etc",
+      "competitor_mentioned": "Competitor name if mentioned",
+      "client_response_sentiment": "Positive/Neutral/Negative/Urgent/Price Sensitive",
+      "follow_up_required": true,
+      "follow_up_reason": "Waiting for client response/Need more info/etc",
+
+      "sales_representative": "Seahorse rep name",
+      "client_account_manager": "Client's contact at their company",
+      "lead_source": "Website/Referral/Email/Phone/Existing Client/etc",
+      "urgency_level": "Rush/Hot/Standard/Flexible",
+      "special_requirements": "All special notes and requirements",
+      "internal_notes": "Any internal Seahorse notes from thread"
     }
   ]
 }
 
-IMPORTANT: 
-- Return ONLY valid JSON, no markdown code blocks, no other text
-- Do not wrap the JSON in \`\`\`json or \`\`\` tags
-- Start directly with { and end with }
-- If the email contains multiple shipments/quotes, create multiple objects in the "quotes" array
-- Each quote in the array should have all the fields listed above
-- The "client_info" should be extracted once and shared across all quotes
-- Use null for any field not found in the email
-- Convert all amounts to USD if currency is mentioned
-- Standardize dates to YYYY-MM-DD format
-- Extract numeric values only (no units in number fields)
-- Be thorough and extract every detail mentioned for each quote`;
+CRITICAL EXTRACTION RULES:
+
+JSON FORMAT:
+- Return ONLY valid JSON, no markdown code blocks, no explanatory text
+- Do NOT wrap in \`\`\`json or \`\`\` tags - start with { and end with }
+- All field names must be in double quotes
+- Use null for missing fields (not "null" string, not empty string, but actual null)
+
+THREAD PARSING:
+- READ THE ENTIRE EMAIL THREAD from bottom to top (oldest to newest)
+- Track what was asked, clarified, quoted, negotiated, and decided
+- In "email_thread_summary": Summarize the conversation flow
+- In "number_of_exchanges": Count back-and-forth messages
+- In "missing_information_requested": List what info Seahorse asked for
+- Combine information from multiple messages (e.g., dimensions from one email, weight from follow-up)
+
+MULTIPLE QUOTES:
+- Create SEPARATE quote objects for:
+  * Different cargo items being shipped
+  * Different service types (e.g., one FTL + one LTL)
+  * Different routes (different origin/destination combinations)
+  * Different equipment types requested
+- Use "quote_sequence_number": 1, 2, 3, etc. to order them
+- If client mentions "Quote #12345" or similar, capture in "quote_identifier"
+
+OVERWEIGHT/OVERSIZED DETECTION:
+- Set "is_overweight": true if weight >80,000 lbs (36,287 kg) OR explicitly mentioned
+- Set "is_oversized": true if:
+  * Width >8.5ft (2.59m) OR
+  * Height >13.5ft (4.11m) OR
+  * Length >53ft (16.15m) OR
+  * Explicitly mentioned as "oversized", "oversize", "OD", "overdimensional"
+- Set "requires_permits": true if overweight/oversized or explicitly mentioned
+- Identify "permit_type" from context (wide load, overweight, superload)
+- Set "requires_pilot_car": true if mentioned or if extremely oversized
+- Infer "equipment_type_requested" from cargo dimensions:
+  * >13.5ft tall → Step Deck, Double Drop, or RGN likely needed
+  * >48,000 lbs → Heavy Haul
+  * Very wide/long → Flatbed or specialized
+
+MEASUREMENT UNITS:
+- NEVER convert units - store exactly as client provided
+- Store the ORIGINAL unit in dimension_unit and weight_unit fields
+- Accept these formats:
+  * Weight: "lbs", "pounds", "kg", "kilograms", "tonnes", "tons", "MT" (metric tons)
+  * Dimension: "ft", "feet", "in", "inches", "m", "meters", "cm", "mm"
+- If mixed units (e.g., "10ft x 3m"), store the most common unit and note in special_requirements
+- Watch for international clients using metric (especially from Canada, Europe, Asia)
+
+QUOTE STATUS INTELLIGENCE:
+Determine "quote_status" by analyzing the thread:
+- "Pending": Client asked for quote, Seahorse hasn't responded yet
+- "Quoted": Seahorse provided pricing, awaiting client response
+- "Negotiating": Client responded asking for better price/terms
+- "Accepted": Client explicitly accepts (says "yes", "approved", "book it", "let's proceed", "we'll take it")
+- "Rejected": Client declines (says "no thanks", "too expensive", "went with someone else", "not at this time")
+- "Expired": Quote validity period passed with no response
+- "Booked": Client confirmed and shipment is scheduled
+
+Set "job_won":
+- true if quote_status = "Accepted" or "Booked"
+- false if quote_status = "Rejected"
+- null otherwise
+
+ACCEPTANCE/REJECTION DETECTION:
+Look for acceptance phrases:
+- "We'll go with this", "Approved", "Please proceed", "Book it", "Confirmed", "Yes, please schedule"
+- "This works", "Sounds good", "Let's move forward", "I'll take it", "We accept"
+
+Look for rejection phrases:
+- "Too expensive", "Out of budget", "We found another carrier", "Went with [competitor]"
+- "Not right now", "We'll pass", "No thank you", "Decline", "Cannot approve"
+
+Look for negotiation phrases:
+- "Can you do better?", "Is this your best price?", "Our budget is...", "Competitor quoted..."
+- "Any room for negotiation?", "Can you match...", "We were hoping for..."
+
+CLIENT SENTIMENT:
+Set "client_response_sentiment":
+- "Positive": Client seems happy, responds quickly, asks to move forward
+- "Negative": Client unhappy with price/terms, threatening to go elsewhere
+- "Urgent": Uses words like "ASAP", "rush", "emergency", "critical", "urgent"
+- "Price Sensitive": Focuses heavily on cost, mentions budget, asks for discounts
+- "Neutral": Standard professional communication
+
+PRICING & NEGOTIATION:
+- "initial_quote_amount": First price Seahorse provided
+- "revised_quote_1": Second price if Seahorse reduced it
+- "revised_quote_2": Third price if further negotiation
+- "final_agreed_price": What client actually accepted (may = initial or revised)
+- "discount_given": Calculate difference between initial and final
+- Track "discount_reason" if mentioned (volume, repeat customer, matching competitor)
+- Note "competitor_mentioned" if client says "XYZ Company quoted $..."
+- Capture "additional_charges" mentioned (fuel surcharge, permits, pilot car, etc.)
+
+DATES:
+- Standardize ALL dates to YYYY-MM-DD format
+- "quote_request_date": When client first asked
+- "quote_provided_date": When Seahorse sent pricing
+- "quote_valid_until": Expiration (often 7-30 days from quote date)
+- "requested_pickup_date": Client's desired pickup
+- "requested_delivery_date": Client's desired delivery
+- "acceptance_date": When client said yes
+- Handle relative dates: "next Monday" → calculate actual date based on email date
+- Handle date ranges: "between June 5-10" → use earliest date
+
+EQUIPMENT TYPE MATCHING:
+If client describes cargo but doesn't specify equipment, infer from:
+- "Tall cargo" (>8ft) → Step Deck, Double Drop
+- "Heavy machinery" → RGN, Lowboy, Heavy Haul
+- "Weatherproof needed" → Conestoga or Dry Van
+- "Temperature sensitive" → Reefer
+- "Standard pallets" → Dry Van or Flatbed
+- "Construction equipment" → RGN, Lowboy
+- "Multiple stops" → LTL or FTL with stops
+
+INTERNATIONAL INDICATORS:
+- Check "client_location_country" from email signature or domain
+- If international: more likely to use metric, may need customs/incoterms
+- Set "customs_clearance_needed": true for cross-border shipments
+- Identify "incoterms" if mentioned (EXW, FOB, CIF, DDP, etc.)
+- Note if client mentions customs broker
+
+DATA QUALITY:
+- Extract numeric values WITHOUT units in the number fields
+- Example: "5,000 lbs" → cargo_weight: 5000, weight_unit: "lbs"
+- Example: "10 ft 6 in" → cargo_length: 10.5, dimension_unit: "ft"
+- Be thorough - extract EVERY detail mentioned across ALL messages in the thread
+- If client provides info in one message and Seahorse quotes in another, combine them
+- Don't miss attachments mention - they often contain detailed specs
+
+FOLLOW-UP TRACKING:
+- Set "follow_up_required": true if:
+  * Seahorse is waiting for client response to quote
+  * Seahorse asked questions that weren't answered
+  * Client said "let me check and get back to you"
+  * Quote status is "Quoted" or "Negotiating"
+- Set "follow_up_reason" to explain why follow-up needed
+- This helps sales team know who to chase
+
+Return complete, accurate JSON following this structure exactly.`;
   }
 
   /**

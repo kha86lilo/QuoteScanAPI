@@ -5,7 +5,9 @@
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { PDFParse } = require('pdf-parse');
+const pdfParseModule = require('pdf-parse');
+// pdf-parse exports PDFParse as a named export
+const pdfParse = pdfParseModule.PDFParse || pdfParseModule;
 
 import ExcelJS from 'exceljs';
 import Tesseract from 'tesseract.js';
@@ -133,8 +135,7 @@ class AttachmentProcessor {
    */
   async extractFromPDF(buffer) {
     try {
-      const parser = new PDFParse({ data: buffer });
-      const data = await parser.getText();
+      const data = await pdfParse(buffer);
       return data.text || '';
     } catch (error) {
       console.error('  ✗ PDF parsing error:', error.message);
