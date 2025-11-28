@@ -4,13 +4,16 @@
  */
 
 import * as db from '../config/db.js';
-import { asyncHandler, NotFoundError, DatabaseError, ValidationError } from '../middleware/errorHandler.js';
 import {
-  processMatchesForNewQuotes,
-  rematchQuote,
-} from '../services/quoteMatchingService.js';
+  asyncHandler,
+  NotFoundError,
+  DatabaseError,
+  ValidationError,
+} from '../middleware/errorHandler.js';
+import { processMatchesForNewQuotes, rematchQuote } from '../services/quoteMatchingService.js';
 import emailExtractorService from '../services/mail/emailExtractor.js';
 import jobProcessor from '../services/jobProcessor.js';
+import { getLatestLastReceivedDateTime } from '../config/db.js';
 
 // Valid feedback reasons for validation
 const VALID_FEEDBACK_REASONS = [
@@ -136,7 +139,9 @@ export const createMatchesBulk = asyncHandler(async (req, res) => {
   for (let i = 0; i < matches.length; i++) {
     const m = matches[i];
     if (!m.sourceQuoteId || !m.matchedQuoteId) {
-      throw new ValidationError(`Match at index ${i}: sourceQuoteId and matchedQuoteId are required`);
+      throw new ValidationError(
+        `Match at index ${i}: sourceQuoteId and matchedQuoteId are required`
+      );
     }
     if (m.similarityScore === undefined || m.similarityScore < 0 || m.similarityScore > 1) {
       throw new ValidationError(`Match at index ${i}: similarityScore must be between 0 and 1`);
@@ -199,7 +204,9 @@ export const submitFeedback = asyncHandler(async (req, res) => {
   }
 
   if (feedbackReason && !VALID_FEEDBACK_REASONS.includes(feedbackReason)) {
-    throw new ValidationError(`feedbackReason must be one of: ${VALID_FEEDBACK_REASONS.join(', ')}`);
+    throw new ValidationError(
+      `feedbackReason must be one of: ${VALID_FEEDBACK_REASONS.join(', ')}`
+    );
   }
 
   // Verify match exists
@@ -303,7 +310,8 @@ export const getMatchCriteriaPerformance = asyncHandler(async (req, res) => {
       description: {
         rating_1: 'Thumbs up - good matches',
         rating_minus1: 'Thumbs down - poor matches',
-        insight: 'Compare avg scores between ratings to identify which criteria need higher thresholds',
+        insight:
+          'Compare avg scores between ratings to identify which criteria need higher thresholds',
       },
     });
   } catch (error) {
@@ -465,10 +473,11 @@ export const runMatchingForAllUnmatched = asyncHandler(async (req, res) => {
  * Body: { searchQuery?, maxEmails?, startDate?, scoreThreshold?, minScore?, maxMatches?, async? }
  */
 export const extractAndMatch = asyncHandler(async (req, res) => {
+  const lastProcessDate = await getLatestLastReceivedDateTime();
   const {
-    searchQuery = 'quote OR shipping OR freight OR cargo',
-    maxEmails = 50,
-    startDate = null,
+    searchQuery = '',
+    maxEmails = 300,
+    startDate = lastProcessDate ?? new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     scoreThreshold = 50,
     minScore = 0.5,
     maxMatches = 3,

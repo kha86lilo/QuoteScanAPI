@@ -16,7 +16,7 @@ class EmailExtractorService {
    */
   async processEmails(options = {}) {
     const {
-      searchQuery = 'quote OR shipping OR freight OR cargo',
+      searchQuery = '',
       maxEmails = 100,
       startDate = null,
       scoreThreshold = 30,

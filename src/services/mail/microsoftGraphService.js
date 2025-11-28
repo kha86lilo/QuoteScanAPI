@@ -75,15 +75,18 @@ class MicrosoftGraphService {
     const baseUrl = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages`;
 
     const params = {
-      $search: `"${searchQuery}"`,
       $top: top,
-      $select: 'id,conversationId,subject,from,receivedDateTime,body,bodyPreview,hasAttachments',
+      $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
       '?$orderby': 'receivedDateTime',
     };
 
+    if (searchQuery && searchQuery.trim()) {
+      params['$search'] = `"${searchQuery}"`;
+    }
+
     // Add date filter if provided
-    if (startDate) {
-      params['?$filter'] = `receivedDateTime ge ${startDate}`;
+    if (startDate && !searchQuery) {
+      params['$filter'] = `receivedDateTime ge ${startDate}`;
     }
 
     try {
@@ -184,7 +187,7 @@ class MicrosoftGraphService {
 
     const params = {
       $top: filters.top || 100,
-      $select: 'id,conversationId,subject,from,receivedDateTime,body,bodyPreview,hasAttachments',
+      $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
       $orderby: 'receivedDateTime',
     };
 

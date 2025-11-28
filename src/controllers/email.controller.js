@@ -83,9 +83,8 @@ export const processNewEmails = asyncHandler(async (req, res) => {
   const startDate = await getLatestLastReceivedDateTime();
 
   // Build job data with incremental processing parameters
-  const jobData = {
-    searchQuery: 'quote OR shipping OR freight OR cargo',
-    maxEmails: 100,
+  const jobData = { 
+    maxEmails: 300,
     startDate: startDate ?? new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     scoreThreshold: 30,
     previewMode: false,
