@@ -5,6 +5,12 @@
 
 import * as db from '../config/db.js';
 import { asyncHandler, NotFoundError, DatabaseError, ValidationError } from '../middleware/errorHandler.js';
+import {
+  processMatchesForNewQuotes,
+  rematchQuote,
+} from '../services/quoteMatchingService.js';
+import emailExtractorService from '../services/mail/emailExtractor.js';
+import jobProcessor from '../services/jobProcessor.js';
 
 // Valid feedback reasons for validation
 const VALID_FEEDBACK_REASONS = [
@@ -304,3 +310,317 @@ export const getMatchCriteriaPerformance = asyncHandler(async (req, res) => {
     throw new DatabaseError('fetching criteria performance', error);
   }
 });
+
+// =====================================================
+// Matching Algorithm Endpoints
+// =====================================================
+
+/**
+ * Run matching for specific quote IDs
+ * POST /api/matches/run
+ * Body: { quoteIds: [1, 2, 3], minScore?: 0.5, maxMatches?: 10 }
+ */
+export const runMatchingForQuotes = asyncHandler(async (req, res) => {
+  const { quoteIds, minScore = 0.5, maxMatches = 10, algorithmVersion = 'v1' } = req.body;
+
+  if (!quoteIds || !Array.isArray(quoteIds) || quoteIds.length === 0) {
+    throw new ValidationError('quoteIds array is required and cannot be empty');
+  }
+
+  // Validate quote IDs are numbers
+  for (const id of quoteIds) {
+    if (typeof id !== 'number' || !Number.isInteger(id)) {
+      throw new ValidationError('All quoteIds must be integers');
+    }
+  }
+
+  try {
+    const results = await processMatchesForNewQuotes(quoteIds, {
+      minScore,
+      maxMatches,
+      algorithmVersion,
+    });
+
+    res.json({
+      success: true,
+      message: `Matching completed for ${results.processed} quotes`,
+      results: {
+        quotesProcessed: results.processed,
+        matchesCreated: results.matchesCreated,
+        errors: results.errors,
+      },
+    });
+  } catch (error) {
+    throw new DatabaseError('running matching algorithm', error);
+  }
+});
+
+/**
+ * Re-run matching for a single quote (deletes existing matches first)
+ * POST /api/matches/rematch/:quoteId
+ */
+export const rematchSingleQuote = asyncHandler(async (req, res) => {
+  const { quoteId } = req.params;
+  const { minScore = 0.5, maxMatches = 10, algorithmVersion = 'v1' } = req.body;
+
+  const quoteIdInt = parseInt(quoteId);
+  if (isNaN(quoteIdInt)) {
+    throw new ValidationError('quoteId must be a valid integer');
+  }
+
+  // Verify quote exists
+  const quote = await db.getQuoteForMatching(quoteIdInt);
+  if (!quote) {
+    throw new NotFoundError(`Quote with ID: ${quoteId}`);
+  }
+
+  try {
+    const results = await rematchQuote(quoteIdInt, {
+      minScore,
+      maxMatches,
+      algorithmVersion,
+    });
+
+    res.json({
+      success: true,
+      message: `Re-matching completed for quote ${quoteId}`,
+      results: {
+        quotesProcessed: results.processed,
+        matchesCreated: results.matchesCreated,
+        errors: results.errors,
+      },
+    });
+  } catch (error) {
+    throw new DatabaseError('re-matching quote', error);
+  }
+});
+
+/**
+ * Run matching for all unmatched quotes
+ * POST /api/matches/run-all
+ * Body: { minScore?: 0.5, maxMatches?: 10, limit?: 100 }
+ */
+export const runMatchingForAllUnmatched = asyncHandler(async (req, res) => {
+  const { minScore = 0.5, maxMatches = 10, limit = 100, algorithmVersion = 'v1' } = req.body;
+
+  try {
+    // Get quotes that don't have any matches yet
+    const client = await db.pool.connect();
+    let unmatchedQuoteIds;
+    try {
+      const result = await client.query(
+        `SELECT q.quote_id
+         FROM shipping_quotes q
+         LEFT JOIN quote_matches m ON q.quote_id = m.source_quote_id
+         WHERE m.match_id IS NULL
+         ORDER BY q.created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+      unmatchedQuoteIds = result.rows.map((r) => r.quote_id);
+    } finally {
+      client.release();
+    }
+
+    if (unmatchedQuoteIds.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No unmatched quotes found',
+        results: {
+          quotesProcessed: 0,
+          matchesCreated: 0,
+          errors: [],
+        },
+      });
+    }
+
+    const results = await processMatchesForNewQuotes(unmatchedQuoteIds, {
+      minScore,
+      maxMatches,
+      algorithmVersion,
+    });
+
+    res.json({
+      success: true,
+      message: `Matching completed for ${results.processed} unmatched quotes`,
+      results: {
+        unmatchedFound: unmatchedQuoteIds.length,
+        quotesProcessed: results.processed,
+        matchesCreated: results.matchesCreated,
+        errors: results.errors,
+      },
+    });
+  } catch (error) {
+    throw new DatabaseError('running matching for unmatched quotes', error);
+  }
+});
+
+// =====================================================
+// Extract and Match Combined Endpoints
+// =====================================================
+
+/**
+ * Extract quotes from emails and run matching (async job)
+ * POST /api/matches/extract-and-match
+ * Body: { searchQuery?, maxEmails?, startDate?, scoreThreshold?, minScore?, maxMatches?, async? }
+ */
+export const extractAndMatch = asyncHandler(async (req, res) => {
+  const {
+    searchQuery = 'quote OR shipping OR freight OR cargo',
+    maxEmails = 50,
+    startDate = null,
+    scoreThreshold = 30,
+    minScore = 0.5,
+    maxMatches = 3,
+    algorithmVersion = 'v1',
+    async = true,
+  } = req.body;
+
+  const jobData = {
+    searchQuery,
+    maxEmails,
+    startDate,
+    scoreThreshold,
+    // Include matching options in job data
+    matchingOptions: {
+      minScore,
+      maxMatches,
+      algorithmVersion,
+    },
+  };
+
+  if (async) {
+    // Create job for async processing
+    const jobId = await jobProcessor.createJob(jobData);
+
+    // Start processing in background with matching
+    processExtractAndMatchJob(jobId, jobData).catch((err) => {
+      console.error(`Unhandled error in extract-and-match job ${jobId}:`, err);
+    });
+
+    const statusUrl = `${req.protocol}://${req.get('host')}/api/jobs/${jobId}`;
+
+    return res.status(202).json({
+      success: true,
+      message: 'Extract and match job accepted for processing',
+      jobId,
+      statusUrl,
+      statusCheckInterval: '5-10 seconds recommended',
+    });
+  }
+
+  // Synchronous processing
+  try {
+    // Step 1: Extract quotes from emails
+    const extractionResults = await emailExtractorService.processEmails({
+      searchQuery,
+      maxEmails,
+      startDate,
+      scoreThreshold,
+    });
+
+    // Step 2: Run matching on newly extracted quotes
+    let matchingResults = { processed: 0, matchesCreated: 0, errors: [] };
+
+    if (extractionResults.newQuoteIds && extractionResults.newQuoteIds.length > 0) {
+      matchingResults = await processMatchesForNewQuotes(extractionResults.newQuoteIds, {
+        minScore,
+        maxMatches,
+        algorithmVersion,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Extract and match completed successfully',
+      results: {
+        extraction: {
+          fetched: extractionResults.fetched,
+          filtered: extractionResults.filtered,
+          processed: extractionResults.processed,
+          newQuoteIds: extractionResults.newQuoteIds,
+        },
+        matching: {
+          quotesProcessed: matchingResults.processed,
+          matchesCreated: matchingResults.matchesCreated,
+          errors: matchingResults.errors,
+        },
+      },
+    });
+  } catch (error) {
+    throw new DatabaseError('extract and match operation', error);
+  }
+});
+
+/**
+ * Helper function to process extract-and-match job asynchronously
+ */
+async function processExtractAndMatchJob(jobId, jobData) {
+  try {
+    // Update status to processing
+    await jobProcessor.updateJob(jobId, {
+      status: 'processing',
+      startedAt: new Date().toISOString(),
+    });
+
+    console.log(`\nStarting extract-and-match job ${jobId}...`);
+
+    // Step 1: Extract quotes from emails
+    const extractionResults = await emailExtractorService.processEmails({
+      searchQuery: jobData.searchQuery,
+      maxEmails: jobData.maxEmails,
+      startDate: jobData.startDate,
+      scoreThreshold: jobData.scoreThreshold,
+    });
+
+    // Step 2: Run matching on newly extracted quotes
+    let matchingResults = { processed: 0, matchesCreated: 0, errors: [] };
+
+    if (extractionResults.newQuoteIds && extractionResults.newQuoteIds.length > 0) {
+      const { minScore, maxMatches, algorithmVersion } = jobData.matchingOptions;
+      matchingResults = await processMatchesForNewQuotes(extractionResults.newQuoteIds, {
+        minScore,
+        maxMatches,
+        algorithmVersion,
+      });
+    }
+
+    // Update job with combined results
+    await jobProcessor.updateJob(jobId, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      result: {
+        extraction: {
+          fetched: extractionResults.fetched,
+          filtered: extractionResults.filtered,
+          processed: extractionResults.processed,
+          newQuoteIds: extractionResults.newQuoteIds,
+          lastReceivedDateTime: extractionResults.lastReceivedDateTime,
+        },
+        matching: {
+          quotesProcessed: matchingResults.processed,
+          matchesCreated: matchingResults.matchesCreated,
+          errors: matchingResults.errors,
+        },
+      },
+      progress: {
+        current: extractionResults.fetched,
+        total: extractionResults.fetched,
+        percentage: 100,
+      },
+    });
+
+    console.log(`Extract-and-match job ${jobId} completed successfully`);
+  } catch (error) {
+    console.error(`Extract-and-match job ${jobId} failed:`, error);
+
+    await jobProcessor.updateJob(jobId, {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      error: {
+        message: error.message,
+        stack: error.stack,
+      },
+    });
+  }
+}

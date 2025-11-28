@@ -32,6 +32,47 @@ router.get('/feedback/by-reason', matchController.getFeedbackByReason);
 router.get('/feedback/criteria-performance', matchController.getMatchCriteriaPerformance);
 
 // =====================================================
+// Matching Algorithm Operations
+// =====================================================
+
+/**
+ * Run matching for specific quote IDs
+ * POST /api/matches/run
+ * Body: { quoteIds: [1, 2, 3], minScore?: 0.5, maxMatches?: 10, algorithmVersion?: 'v1' }
+ */
+router.post('/run', matchController.runMatchingForQuotes);
+
+/**
+ * Run matching for all unmatched quotes
+ * POST /api/matches/run-all
+ * Body: { minScore?: 0.5, maxMatches?: 10, limit?: 100, algorithmVersion?: 'v1' }
+ */
+router.post('/run-all', matchController.runMatchingForAllUnmatched);
+
+/**
+ * Extract quotes from emails and run matching (combined operation)
+ * POST /api/matches/extract-and-match
+ * Body: {
+ *   searchQuery?: string,      // Email search query (default: 'quote OR shipping OR freight OR cargo')
+ *   maxEmails?: number,        // Max emails to fetch (default: 50)
+ *   startDate?: string,        // ISO date to start from
+ *   scoreThreshold?: number,   // Email filter score threshold (default: 30)
+ *   minScore?: number,         // Minimum match similarity score (default: 0.5)
+ *   maxMatches?: number,       // Max matches per quote (default: 3)
+ *   algorithmVersion?: string, // Matching algorithm version (default: 'v1')
+ *   async?: boolean            // Run as background job (default: true)
+ * }
+ */
+router.post('/extract-and-match', matchController.extractAndMatch);
+
+/**
+ * Re-run matching for a single quote (deletes existing matches first)
+ * POST /api/matches/rematch/:quoteId
+ * Body: { minScore?: 0.5, maxMatches?: 10, algorithmVersion?: 'v1' }
+ */
+router.post('/rematch/:quoteId', matchController.rematchSingleQuote);
+
+// =====================================================
 // Match CRUD Operations
 // =====================================================
 
