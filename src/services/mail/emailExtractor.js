@@ -7,6 +7,7 @@ import * as microsoftGraphService from './microsoftGraphService.js';
 import * as emailFilter from './emailFilter.js';
 import * as db from '../../config/db.js';
 import { getAIService, getProviderInfo } from '../ai/aiServiceFactory.js';
+import { processMatchesForNewQuotes } from '../quoteMatchingService.js';
 
 class EmailExtractorService {
   /**
@@ -43,7 +44,11 @@ class EmailExtractorService {
       estimatedSavings: 0,
       errors: [],
       lastReceivedDateTime: null,
+      matching: { processed: 0, matchesCreated: 0 },
     };
+
+    // Track newly inserted quote IDs for matching
+    const newQuoteIds = [];
 
     try {
       // Fetch emails
@@ -159,6 +164,11 @@ class EmailExtractorService {
           const saveResult = await db.saveQuoteToDatabase(email, parsedData);
           console.log(`  ✓ Saved ${saveResult.quotes_count} quote(s) to database`);
           results.processed.successful++;
+
+          // Track new quote IDs for matching
+          if (saveResult.quote_ids && saveResult.quote_ids.length > 0) {
+            newQuoteIds.push(...saveResult.quote_ids);
+          }
         } catch (error) {
           console.error(`  ✗ Error processing email:`, error.message);
           results.processed.failed++;
@@ -166,6 +176,23 @@ class EmailExtractorService {
             emailId: email.id,
             subject: email.subject,
             error: error.message,
+          });
+        }
+      }
+
+      // Run fuzzy matching for newly inserted quotes
+      if (newQuoteIds.length > 0) {
+        try {
+          const matchingResults = await processMatchesForNewQuotes(newQuoteIds);
+          results.matching = {
+            processed: matchingResults.processed,
+            matchesCreated: matchingResults.matchesCreated,
+          };
+        } catch (matchError) {
+          console.error('Error in quote matching:', matchError.message);
+          results.errors.push({
+            stage: 'matching',
+            error: matchError.message,
           });
         }
       }
@@ -180,6 +207,7 @@ class EmailExtractorService {
       console.log(`✓ Successfully processed: ${results.processed.successful}`);
       console.log(`⊘ Skipped (already in DB): ${results.processed.skipped}`);
       console.log(`✗ Failed: ${results.processed.failed}`);
+      console.log(`🔗 Matches created: ${results.matching.matchesCreated}`);
       const requestPrice = parseFloat(process.env.REQUEST_PRICE) || 0.015;
       const actualCost = results.processed.successful * requestPrice;
       console.log(`💰 Actual cost: $${actualCost.toFixed(2)}`);
@@ -191,6 +219,7 @@ class EmailExtractorService {
         fetched: results.fetched,
         filtered: results.filtered,
         processed: results.processed,
+        matching: results.matching,
         estimatedCost: results.estimatedCost,
         estimatedSavings: results.estimatedSavings,
         actualCost: actualCost,

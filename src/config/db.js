@@ -1053,6 +1053,118 @@ async function getMatchCriteriaPerformance() {
   }
 }
 
+/**
+ * Get historical quotes for fuzzy matching (excludes given quote IDs)
+ * @param {Array<number>} excludeQuoteIds - Quote IDs to exclude from results
+ * @param {Object} options - Query options
+ * @returns {Promise<Array>} - Historical quotes with relevant fields for matching
+ */
+async function getHistoricalQuotesForMatching(excludeQuoteIds = [], options = {}) {
+  const { limit = 500, onlyWithPrice = true } = options;
+  const client = await pool.connect();
+  try {
+    let whereClause = 'WHERE 1=1';
+    const params = [];
+    let paramIndex = 1;
+
+    // Exclude specific quote IDs
+    if (excludeQuoteIds.length > 0) {
+      whereClause += ` AND quote_id != ALL($${paramIndex}::int[])`;
+      params.push(excludeQuoteIds);
+      paramIndex++;
+    }
+
+    // Only include quotes with pricing data (more useful for suggestions)
+    if (onlyWithPrice) {
+      whereClause += ` AND (final_agreed_price IS NOT NULL OR initial_quote_amount IS NOT NULL)`;
+    }
+
+    const result = await client.query(
+      `SELECT
+        quote_id,
+        client_company_name,
+        origin_city,
+        origin_state_province,
+        origin_country,
+        destination_city,
+        destination_state_province,
+        destination_country,
+        cargo_description,
+        cargo_weight,
+        weight_unit,
+        cargo_length,
+        cargo_width,
+        cargo_height,
+        dimension_unit,
+        number_of_pieces,
+        service_type,
+        service_level,
+        packaging_type,
+        hazardous_material,
+        initial_quote_amount,
+        final_agreed_price,
+        quote_status,
+        quote_date,
+        created_at
+      FROM shipping_quotes
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex}`,
+      [...params, limit]
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get a quote by ID with fields needed for matching
+ * @param {number} quoteId - Quote ID
+ * @returns {Promise<Object|null>} - Quote object or null
+ */
+async function getQuoteForMatching(quoteId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT
+        quote_id,
+        client_company_name,
+        origin_city,
+        origin_state_province,
+        origin_country,
+        destination_city,
+        destination_state_province,
+        destination_country,
+        cargo_description,
+        cargo_weight,
+        weight_unit,
+        cargo_length,
+        cargo_width,
+        cargo_height,
+        dimension_unit,
+        number_of_pieces,
+        service_type,
+        service_level,
+        packaging_type,
+        hazardous_material,
+        initial_quote_amount,
+        final_agreed_price,
+        quote_status,
+        quote_date,
+        created_at
+      FROM shipping_quotes
+      WHERE quote_id = $1`,
+      [quoteId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
@@ -1084,4 +1196,7 @@ export {
   getFeedbackStatistics,
   getFeedbackByReason,
   getMatchCriteriaPerformance,
+  // Historical quotes for matching
+  getHistoricalQuotesForMatching,
+  getQuoteForMatching,
 };
