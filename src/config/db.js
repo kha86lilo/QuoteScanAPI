@@ -686,6 +686,373 @@ async function getCurrentTime() {
   }
 }
 
+// =====================================================
+// Quote Matches Functions
+// =====================================================
+
+/**
+ * Create a new quote match
+ * @param {Object} matchData - Match data
+ * @returns {Promise<Object>} - Created match
+ */
+async function createQuoteMatch(matchData) {
+  const client = await pool.connect();
+  try {
+    const {
+      sourceQuoteId,
+      matchedQuoteId,
+      similarityScore,
+      matchCriteria,
+      suggestedPrice,
+      priceConfidence,
+      algorithmVersion = 'v1',
+    } = matchData;
+
+    const result = await client.query(
+      `INSERT INTO quote_matches (
+        source_quote_id, matched_quote_id, similarity_score,
+        match_criteria, suggested_price, price_confidence, match_algorithm_version
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (source_quote_id, matched_quote_id)
+      DO UPDATE SET
+        similarity_score = EXCLUDED.similarity_score,
+        match_criteria = EXCLUDED.match_criteria,
+        suggested_price = EXCLUDED.suggested_price,
+        price_confidence = EXCLUDED.price_confidence,
+        match_algorithm_version = EXCLUDED.match_algorithm_version,
+        created_at = NOW()
+      RETURNING *`,
+      [
+        sourceQuoteId,
+        matchedQuoteId,
+        similarityScore,
+        JSON.stringify(matchCriteria),
+        suggestedPrice,
+        priceConfidence,
+        algorithmVersion,
+      ]
+    );
+
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Create multiple quote matches in bulk
+ * @param {Array} matches - Array of match data objects
+ * @returns {Promise<Array>} - Created matches
+ */
+async function createQuoteMatchesBulk(matches) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const results = [];
+    for (const match of matches) {
+      const result = await client.query(
+        `INSERT INTO quote_matches (
+          source_quote_id, matched_quote_id, similarity_score,
+          match_criteria, suggested_price, price_confidence, match_algorithm_version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (source_quote_id, matched_quote_id)
+        DO UPDATE SET
+          similarity_score = EXCLUDED.similarity_score,
+          match_criteria = EXCLUDED.match_criteria,
+          suggested_price = EXCLUDED.suggested_price,
+          price_confidence = EXCLUDED.price_confidence,
+          match_algorithm_version = EXCLUDED.match_algorithm_version,
+          created_at = NOW()
+        RETURNING *`,
+        [
+          match.sourceQuoteId,
+          match.matchedQuoteId,
+          match.similarityScore,
+          JSON.stringify(match.matchCriteria),
+          match.suggestedPrice,
+          match.priceConfidence,
+          match.algorithmVersion || 'v1',
+        ]
+      );
+      results.push(result.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    return results;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get matches for a quote
+ * @param {number} quoteId - Source quote ID
+ * @param {Object} options - Query options (limit, minScore)
+ * @returns {Promise<Array>} - Array of matches with matched quote details
+ */
+async function getMatchesForQuote(quoteId, options = {}) {
+  const { limit = 10, minScore = 0 } = options;
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT
+        m.*,
+        q.client_company_name,
+        q.origin_city,
+        q.origin_country,
+        q.destination_city,
+        q.destination_country,
+        q.cargo_description,
+        q.cargo_weight,
+        q.weight_unit,
+        q.service_type,
+        q.final_agreed_price,
+        q.initial_quote_amount,
+        q.quote_status,
+        q.quote_date,
+        COALESCE(fb.feedback_count, 0) as feedback_count,
+        fb.avg_rating
+      FROM quote_matches m
+      INNER JOIN shipping_quotes q ON m.matched_quote_id = q.quote_id
+      LEFT JOIN (
+        SELECT match_id, COUNT(*) as feedback_count, AVG(rating) as avg_rating
+        FROM quote_match_feedback
+        GROUP BY match_id
+      ) fb ON m.match_id = fb.match_id
+      WHERE m.source_quote_id = $1 AND m.similarity_score >= $2
+      ORDER BY m.similarity_score DESC
+      LIMIT $3`,
+      [quoteId, minScore, limit]
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get a single match by ID
+ * @param {number} matchId - Match ID
+ * @returns {Promise<Object|null>} - Match object or null
+ */
+async function getMatchById(matchId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT
+        m.*,
+        sq.client_company_name as source_client,
+        sq.origin_city as source_origin_city,
+        sq.destination_city as source_destination_city,
+        mq.client_company_name as matched_client,
+        mq.origin_city as matched_origin_city,
+        mq.destination_city as matched_destination_city,
+        mq.final_agreed_price as matched_final_price,
+        mq.initial_quote_amount as matched_initial_price
+      FROM quote_matches m
+      INNER JOIN shipping_quotes sq ON m.source_quote_id = sq.quote_id
+      INNER JOIN shipping_quotes mq ON m.matched_quote_id = mq.quote_id
+      WHERE m.match_id = $1`,
+      [matchId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Delete a match
+ * @param {number} matchId - Match ID
+ * @returns {Promise<boolean>} - True if deleted
+ */
+async function deleteMatch(matchId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM quote_matches WHERE match_id = $1 RETURNING match_id',
+      [matchId]
+    );
+    return result.rows.length > 0;
+  } finally {
+    client.release();
+  }
+}
+
+// =====================================================
+// Quote Match Feedback Functions
+// =====================================================
+
+/**
+ * Submit feedback for a match
+ * @param {Object} feedbackData - Feedback data
+ * @returns {Promise<Object>} - Created feedback
+ */
+async function submitMatchFeedback(feedbackData) {
+  const client = await pool.connect();
+  try {
+    const {
+      matchId,
+      userId = null,
+      rating,
+      feedbackReason = null,
+      feedbackNotes = null,
+      actualPriceUsed = null,
+    } = feedbackData;
+
+    const result = await client.query(
+      `INSERT INTO quote_match_feedback (
+        match_id, user_id, rating, feedback_reason, feedback_notes, actual_price_used
+      ) VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (match_id, user_id)
+      DO UPDATE SET
+        rating = EXCLUDED.rating,
+        feedback_reason = EXCLUDED.feedback_reason,
+        feedback_notes = EXCLUDED.feedback_notes,
+        actual_price_used = EXCLUDED.actual_price_used,
+        created_at = NOW()
+      RETURNING *`,
+      [matchId, userId, rating, feedbackReason, feedbackNotes, actualPriceUsed]
+    );
+
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get feedback for a match
+ * @param {number} matchId - Match ID
+ * @returns {Promise<Array>} - Array of feedback entries
+ */
+async function getFeedbackForMatch(matchId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT * FROM quote_match_feedback
+      WHERE match_id = $1
+      ORDER BY created_at DESC`,
+      [matchId]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get feedback statistics for algorithm improvement
+ * @param {Object} filters - Optional filters
+ * @returns {Promise<Object>} - Aggregated feedback statistics
+ */
+async function getFeedbackStatistics(filters = {}) {
+  const client = await pool.connect();
+  try {
+    const { algorithmVersion, startDate, endDate } = filters;
+
+    let whereClause = 'WHERE 1=1';
+    const params = [];
+    let paramIndex = 1;
+
+    if (algorithmVersion) {
+      whereClause += ` AND m.match_algorithm_version = $${paramIndex}`;
+      params.push(algorithmVersion);
+      paramIndex++;
+    }
+
+    if (startDate) {
+      whereClause += ` AND f.created_at >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      whereClause += ` AND f.created_at <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    const result = await client.query(
+      `SELECT
+        COUNT(*) as total_feedback,
+        COUNT(CASE WHEN f.rating = 1 THEN 1 END) as thumbs_up,
+        COUNT(CASE WHEN f.rating = -1 THEN 1 END) as thumbs_down,
+        ROUND(AVG(f.rating)::numeric, 4) as avg_rating,
+        ROUND(AVG(m.similarity_score)::numeric, 4) as avg_similarity_score,
+        COUNT(CASE WHEN f.rating = 1 THEN 1 END)::float / NULLIF(COUNT(*), 0) as approval_rate,
+        ROUND(AVG(CASE WHEN f.actual_price_used IS NOT NULL
+          THEN ABS(m.suggested_price - f.actual_price_used) END)::numeric, 2) as avg_price_error,
+        COUNT(f.actual_price_used) as price_feedback_count
+      FROM quote_match_feedback f
+      INNER JOIN quote_matches m ON f.match_id = m.match_id
+      ${whereClause}`,
+      params
+    );
+
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get feedback breakdown by reason
+ * @returns {Promise<Array>} - Feedback counts by reason
+ */
+async function getFeedbackByReason() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT
+        feedback_reason,
+        rating,
+        COUNT(*) as count
+      FROM quote_match_feedback
+      WHERE feedback_reason IS NOT NULL
+      GROUP BY feedback_reason, rating
+      ORDER BY count DESC`
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get match criteria performance (which fields correlate with good/bad feedback)
+ * @returns {Promise<Object>} - Per-field performance metrics
+ */
+async function getMatchCriteriaPerformance() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT
+        f.rating,
+        AVG((m.match_criteria->>'origin')::numeric) as avg_origin_score,
+        AVG((m.match_criteria->>'destination')::numeric) as avg_destination_score,
+        AVG((m.match_criteria->>'cargo_type')::numeric) as avg_cargo_type_score,
+        AVG((m.match_criteria->>'weight')::numeric) as avg_weight_score,
+        AVG((m.match_criteria->>'service_type')::numeric) as avg_service_type_score,
+        AVG(m.similarity_score) as avg_overall_score,
+        COUNT(*) as sample_count
+      FROM quote_match_feedback f
+      INNER JOIN quote_matches m ON f.match_id = m.match_id
+      GROUP BY f.rating`
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
@@ -705,4 +1072,16 @@ export {
   deleteQuote,
   testConnection,
   getCurrentTime,
+  // Quote matches
+  createQuoteMatch,
+  createQuoteMatchesBulk,
+  getMatchesForQuote,
+  getMatchById,
+  deleteMatch,
+  // Match feedback
+  submitMatchFeedback,
+  getFeedbackForMatch,
+  getFeedbackStatistics,
+  getFeedbackByReason,
+  getMatchCriteriaPerformance,
 };
