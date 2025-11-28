@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run format:check:*)",
+      "Bash(node analyze_quotes.js:*)",
+      "Bash(npm install)",
+      "Bash(node test_new_emails.js:*)",
+      "Bash(node count_emails.js:*)",
+      "Bash(node process_external_emails.js:*)",
+      "Bash(node:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

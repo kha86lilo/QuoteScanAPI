@@ -9,16 +9,16 @@ import * as db from '../config/db.js';
 
 class JobProcessor {
   constructor() {
-    // In-memory job storage (consider Redis or database for production)
+    // In-memory cache for active jobs (database is primary storage)
     this.jobs = new Map();
   }
 
   /**
    * Create a new job
    * @param {Object} jobData - Job configuration
-   * @returns {string} - Job ID
+   * @returns {Promise<string>} - Job ID
    */
-  createJob(jobData) {
+  async createJob(jobData) {
     const jobId = uuidv4();
     const job = {
       id: jobId,
@@ -38,12 +38,11 @@ class JobProcessor {
       lastReceivedDateTime: null,
     };
 
-    this.jobs.set(jobId, job);
+    // Save to database first (primary storage)
+    await db.saveJobToDatabase(job);
 
-    // Also save to database
-    db.saveJobToDatabase(job).catch((err) => {
-      console.error('Error saving job to database:', err);
-    });
+    // Cache in memory for quick access
+    this.jobs.set(jobId, job);
 
     return jobId;
   }
@@ -88,19 +87,16 @@ class JobProcessor {
       updatedAt: new Date().toISOString(),
     });
 
-    
-
     // Extract lastReceivedDateTime if present in result
     if (updates.result && updates.result.lastReceivedDateTime) {
       job.lastReceivedDateTime = updates.result.lastReceivedDateTime;
     }
 
-    this.jobs.set(jobId, job);
+    // Update database first (primary storage)
+    await db.updateJobInDatabase(job);
 
-    // Update database
-    await db.updateJobInDatabase(job).catch((err) => {
-      console.error('Error updating job in database:', err);
-    });
+    // Update in-memory cache
+    this.jobs.set(jobId, job);
   }
 
   /**
@@ -169,16 +165,50 @@ class JobProcessor {
   /**
    * Get all jobs (with optional filtering)
    * @param {Object} filters - Filter options
-   * @returns {Array} - Array of jobs
+   * @returns {Promise<Array>} - Array of jobs
    */
   async getAllJobs(filters = {}) {
-    const jobs = Array.from(this.jobs.values());
+    // Fetch from database (primary source)
+    try {
+      const client = await db.pool.connect();
+      try {
+        let query = 'SELECT * FROM processing_jobs';
+        const params = [];
 
-    if (filters.status) {
-      return jobs.filter((job) => job.status === filters.status);
+        if (filters.status) {
+          query += ' WHERE status = $1';
+          params.push(filters.status);
+        }
+
+        query += ' ORDER BY created_at DESC';
+
+        const result = await client.query(query, params);
+
+        return result.rows.map((row) => ({
+          id: row.job_id,
+          status: row.status,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          startedAt: row.started_at,
+          completedAt: row.completed_at,
+          data: row.job_data,
+          result: row.result,
+          error: row.error,
+          progress: row.progress,
+          lastReceivedDateTime: row.last_received_datetime,
+        }));
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching jobs from database:', error);
+      // Fallback to in-memory cache
+      const jobs = Array.from(this.jobs.values());
+      if (filters.status) {
+        return jobs.filter((job) => job.status === filters.status);
+      }
+      return jobs;
     }
-
-    return jobs;
   }
 
   /**

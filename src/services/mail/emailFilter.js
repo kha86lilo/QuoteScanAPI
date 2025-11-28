@@ -24,13 +24,38 @@ class EmailFilter {
     'proposal',
     'bid',
     'tariff',
+    // Load types
     'ltl',
     'ftl',
     'fcl',
-    'lcl', // Logistics terms
+    'lcl',
+    'partial load',
+    'full truckload',
+    // Services
     'drayage',
     'transload',
     'cross dock',
+    'intermodal',
+    // Overweight/Oversized specific
+    'overweight',
+    'oversized',
+    'oversize',
+    'over dimensional',
+    'overdimensional',
+    'heavy haul',
+    'permit load',
+    'wide load',
+    'superload',
+    // Equipment types
+    'flatbed',
+    'step deck',
+    'stepdeck',
+    'rgn',
+    'lowboy',
+    'double drop',
+    'conestoga',
+    'hotshot',
+    'power only',
   ];
 
   // Keywords that moderately indicate a quote
@@ -41,19 +66,40 @@ class EmailFilter {
     'logistics',
     'pallet',
     'pallets',
+    'skid',
+    'skids',
+    'crate',
     'container',
     'containers',
     'origin',
     'destination',
     'weight',
     'dimensions',
+    'length',
+    'width',
+    'height',
+    'lbs',
+    'pounds',
+    'kg',
+    'kilograms',
+    'tonnes',
+    'tons',
+    'feet',
+    'meters',
+    // Urgency
     'urgent',
     'asap',
     'rush',
     'expedite',
+    'expedited',
+    'time sensitive',
+    'critical',
+    // Special requirements
     'hazmat',
+    'hazardous',
     'temperature controlled',
     'refrigerated',
+    'reefer',
     'customs',
     'import',
     'export',
@@ -61,6 +107,49 @@ class EmailFilter {
     'warehousing',
     'storage',
     'distribution',
+    // Equipment and loading
+    'machinery',
+    'equipment',
+    'construction',
+    'industrial',
+    'crane',
+    'forklift',
+    'loading dock',
+    'liftgate',
+    'tarping',
+    'tarp',
+    'securement',
+    'straps',
+    'chains',
+    // Permits and escorts
+    'permit',
+    'permits',
+    'pilot car',
+    'escort',
+    'route survey',
+    // Cargo types
+    'steel',
+    'lumber',
+    'pipe',
+    'coil',
+    'rebar',
+    'beam',
+    'truss',
+    'generator',
+    'transformer',
+    'excavator',
+    'bulldozer',
+    'crane',
+    'boat',
+    'yacht',
+    // Terms
+    'incoterms',
+    'fob',
+    'cif',
+    'ddp',
+    'exw',
+    'bol',
+    'bill of lading',
   ];
 
   // Keywords that indicate it's NOT a quote (internal/spam)
@@ -99,9 +188,29 @@ class EmailFilter {
     const subject = (email.subject || '').toLowerCase();
     const bodyPreview = (email.bodyPreview || '').toLowerCase();
     const senderEmail = (email.from?.emailAddress?.address || '').toLowerCase();
+    const senderName = (email.from?.emailAddress?.name || '').toLowerCase();
+
+    // Extract sender domain
+    const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';
 
     // Combine subject and preview for analysis
     const content = `${subject} ${bodyPreview}`;
+
+    // 0. CRITICAL: Exclude internal Seahorse emails (outgoing quotes, not incoming requests)
+    if (senderDomain === 'seahorseexpress.com' || senderEmail.includes('seahorseexpress.com')) {
+      return { score: 0, reason: 'Internal Seahorse email - outgoing quote (excluded)' };
+    }
+
+    // Exclude known Seahorse staff by name (in case emails come from personal addresses)
+    const seahorseStaff = [
+      'danny nasser',
+      'tina merkab',
+      'seahorse express',
+      // Add other staff names here
+    ];
+    if (seahorseStaff.some((name) => senderName.includes(name))) {
+      return { score: 0, reason: `Known Seahorse staff: ${senderName} (excluded)` };
+    }
 
     // 1. Check for exclusion keywords (immediate reject)
     for (const keyword of EmailFilter.EXCLUDE_KEYWORDS) {
@@ -153,16 +262,7 @@ class EmailFilter {
       reasons.push('Contains dimensions');
     }
 
-    // 6. Check sender domain
-    const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';
-
-    // Penalize internal emails from Seahorse Express (likely forwarded/replies)
-    if (senderDomain.toLowerCase().includes('seahorseexpress.com')) {
-      score -= 30;
-      reasons.push('Internal Seahorse Express sender');
-    }
-
-    // Penalize automated senders
+    // 6. Check for automated senders (already excluded internal Seahorse above)
     if (
       senderEmail.startsWith('noreply@') ||
       senderEmail.startsWith('no-reply@') ||
