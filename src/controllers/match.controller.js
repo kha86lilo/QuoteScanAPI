@@ -469,7 +469,7 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
     searchQuery = 'quote OR shipping OR freight OR cargo',
     maxEmails = 50,
     startDate = null,
-    scoreThreshold = 30,
+    scoreThreshold = 50,
     minScore = 0.5,
     maxMatches = 3,
     algorithmVersion = 'v1',

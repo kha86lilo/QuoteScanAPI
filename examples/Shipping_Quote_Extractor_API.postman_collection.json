@@ -458,6 +458,427 @@
 				}
 			],
 			"description": "Statistics and analytics endpoints"
+		},
+		{
+			"name": "Quote Matching",
+			"item": [
+				{
+					"name": "Extract and Match (Combined)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"searchQuery\": \"quote OR shipping OR freight OR cargo\",\n  \"maxEmails\": 50,\n  \"startDate\": \"2025-11-01T00:00:00Z\",\n  \"scoreThreshold\": 50,\n  \"minScore\": 0.5,\n  \"maxMatches\": 3,\n  \"algorithmVersion\": \"v1\",\n  \"async\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/extract-and-match",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"extract-and-match"
+							]
+						},
+						"description": "Extract quotes from emails and run fuzzy matching to find similar historical quotes. Returns best 3 matches per quote by default."
+					},
+					"response": []
+				},
+				{
+					"name": "Run Matching for Quotes",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"quoteIds\": [1, 2, 3],\n  \"minScore\": 0.5,\n  \"maxMatches\": 10,\n  \"algorithmVersion\": \"v1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/run",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"run"
+							]
+						},
+						"description": "Run matching algorithm for specific quote IDs"
+					},
+					"response": []
+				},
+				{
+					"name": "Run Matching for All Unmatched",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"minScore\": 0.5,\n  \"maxMatches\": 10,\n  \"limit\": 100,\n  \"algorithmVersion\": \"v1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/run-all",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"run-all"
+							]
+						},
+						"description": "Run matching for all quotes that don't have matches yet"
+					},
+					"response": []
+				},
+				{
+					"name": "Rematch Single Quote",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"minScore\": 0.5,\n  \"maxMatches\": 10,\n  \"algorithmVersion\": \"v1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/rematch/:quoteId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"rematch",
+								":quoteId"
+							],
+							"variable": [
+								{
+									"key": "quoteId",
+									"value": "1",
+									"description": "Quote ID to rematch"
+								}
+							]
+						},
+						"description": "Delete existing matches and re-run matching for a single quote"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Matches for Quote",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/quote/:quoteId?limit=10&minScore=0",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"quote",
+								":quoteId"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "minScore",
+									"value": "0"
+								}
+							],
+							"variable": [
+								{
+									"key": "quoteId",
+									"value": "1",
+									"description": "Quote ID"
+								}
+							]
+						},
+						"description": "Get all matches for a specific quote"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Match by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/:matchId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								":matchId"
+							],
+							"variable": [
+								{
+									"key": "matchId",
+									"value": "1",
+									"description": "Match ID"
+								}
+							]
+						},
+						"description": "Get a single match by its ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Match",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sourceQuoteId\": 1,\n  \"matchedQuoteId\": 2,\n  \"similarityScore\": 0.85,\n  \"matchCriteria\": {\n    \"origin\": 0.9,\n    \"destination\": 0.8,\n    \"cargo_type\": 0.7\n  },\n  \"suggestedPrice\": 1500.00,\n  \"priceConfidence\": 0.75,\n  \"algorithmVersion\": \"v1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches"
+							]
+						},
+						"description": "Create a new match manually"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Matches Bulk",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"matches\": [\n    {\n      \"sourceQuoteId\": 1,\n      \"matchedQuoteId\": 2,\n      \"similarityScore\": 0.85,\n      \"algorithmVersion\": \"v1\"\n    },\n    {\n      \"sourceQuoteId\": 1,\n      \"matchedQuoteId\": 3,\n      \"similarityScore\": 0.72,\n      \"algorithmVersion\": \"v1\"\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/bulk",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"bulk"
+							]
+						},
+						"description": "Create multiple matches in bulk"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Match",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/:matchId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								":matchId"
+							],
+							"variable": [
+								{
+									"key": "matchId",
+									"value": "1",
+									"description": "Match ID to delete"
+								}
+							]
+						},
+						"description": "Delete a match by its ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Submit Match Feedback",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"rating\": 1,\n  \"feedbackReason\": \"good_match\",\n  \"feedbackNotes\": \"This was a very accurate match\",\n  \"actualPriceUsed\": 1450.00,\n  \"userId\": \"user123\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/:matchId/feedback",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								":matchId",
+								"feedback"
+							],
+							"variable": [
+								{
+									"key": "matchId",
+									"value": "1",
+									"description": "Match ID"
+								}
+							]
+						},
+						"description": "Submit feedback for a match (rating: 1 for thumbs up, -1 for thumbs down). Valid reasons: good_match, excellent_suggestion, wrong_route, different_cargo, price_outdated, weight_mismatch, service_mismatch, different_client_type, other"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Feedback for Match",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/:matchId/feedback",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								":matchId",
+								"feedback"
+							],
+							"variable": [
+								{
+									"key": "matchId",
+									"value": "1",
+									"description": "Match ID"
+								}
+							]
+						},
+						"description": "Get all feedback for a specific match"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Feedback Statistics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/feedback/stats?algorithmVersion=v1&startDate=2025-01-01&endDate=2025-12-31",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"feedback",
+								"stats"
+							],
+							"query": [
+								{
+									"key": "algorithmVersion",
+									"value": "v1"
+								},
+								{
+									"key": "startDate",
+									"value": "2025-01-01"
+								},
+								{
+									"key": "endDate",
+									"value": "2025-12-31"
+								}
+							]
+						},
+						"description": "Get overall feedback statistics with optional filters"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Feedback by Reason",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/feedback/by-reason",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"feedback",
+								"by-reason"
+							]
+						},
+						"description": "Get feedback breakdown by reason"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Criteria Performance",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/feedback/criteria-performance",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"feedback",
+								"criteria-performance"
+							]
+						},
+						"description": "Get match criteria performance analysis to identify which criteria need tuning"
+					},
+					"response": []
+				}
+			],
+			"description": "Quote matching, feedback, and analysis endpoints"
 		}
 	],
 	"variable": [

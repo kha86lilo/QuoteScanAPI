@@ -17,6 +17,13 @@ const DEFAULT_WEIGHTS = {
   pieces: 0.05,         // Number of pieces similarity
 };
 
+// Recency weight configuration
+const RECENCY_CONFIG = {
+  weight: 0.15,         // How much recency affects the final score (0-1)
+  halfLifeDays: 90,     // Days after which recency score is halved
+  maxAgeDays: 365,      // Quotes older than this get minimum recency score
+};
+
 // Minimum score threshold to consider a match
 const MIN_MATCH_SCORE = 0.5;
 
@@ -197,9 +204,34 @@ function exactMatch(val1, val2) {
 }
 
 /**
- * Calculate overall similarity between two quotes
+ * Calculate recency score (0 to 1) using exponential decay
+ * Newer quotes get higher scores
  */
-function calculateSimilarity(sourceQuote, historicalQuote, weights = DEFAULT_WEIGHTS) {
+function calculateRecencyScore(quoteDate, config = RECENCY_CONFIG) {
+  if (!quoteDate) return 0;
+
+  const now = new Date();
+  const date = new Date(quoteDate);
+  const ageDays = (now - date) / (1000 * 60 * 60 * 24);
+
+  // If older than max age, return minimum score
+  if (ageDays >= config.maxAgeDays) return 0;
+
+  // Exponential decay: score = 0.5^(ageDays / halfLifeDays)
+  // This gives 1.0 for today, 0.5 at halfLifeDays, 0.25 at 2*halfLifeDays, etc.
+  const decayFactor = Math.pow(0.5, ageDays / config.halfLifeDays);
+
+  return Math.max(0, Math.min(1, decayFactor));
+}
+
+/**
+ * Calculate overall similarity between two quotes
+ * @param {Object} sourceQuote - The quote to find matches for
+ * @param {Object} historicalQuote - A historical quote to compare against
+ * @param {Object} weights - Weights for matching criteria
+ * @param {Object} recencyConfig - Configuration for recency weighting
+ */
+function calculateSimilarity(sourceQuote, historicalQuote, weights = DEFAULT_WEIGHTS, recencyConfig = RECENCY_CONFIG) {
   const criteria = {};
 
   // Origin similarity
@@ -238,7 +270,12 @@ function calculateSimilarity(sourceQuote, historicalQuote, weights = DEFAULT_WEI
   // Number of pieces
   criteria.pieces = numericSimilarity(sourceQuote.number_of_pieces, historicalQuote.number_of_pieces, 0.3);
 
-  // Calculate weighted score
+  // Recency score - newer quotes get higher scores
+  // Use quote_date or created_at as the date reference
+  const quoteDate = historicalQuote.quote_date || historicalQuote.created_at;
+  criteria.recency = calculateRecencyScore(quoteDate, recencyConfig);
+
+  // Calculate weighted score for base criteria (excluding recency)
   let totalWeight = 0;
   let weightedSum = 0;
 
@@ -249,7 +286,11 @@ function calculateSimilarity(sourceQuote, historicalQuote, weights = DEFAULT_WEI
     }
   }
 
-  const overallScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
+  const baseScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
+
+  // Blend base score with recency: final = (1 - recencyWeight) * baseScore + recencyWeight * recency
+  const recencyWeight = recencyConfig.weight;
+  const overallScore = (1 - recencyWeight) * baseScore + recencyWeight * criteria.recency;
 
   return {
     score: Math.round(overallScore * 10000) / 10000,
@@ -445,4 +486,5 @@ export {
   calculateSimilarity,
   DEFAULT_WEIGHTS,
   MIN_MATCH_SCORE,
+  RECENCY_CONFIG,
 };
