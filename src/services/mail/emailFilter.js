@@ -3,6 +3,8 @@
  * Pre-filters emails to identify likely quote requests before expensive API processing
  */
 
+import { isSpammer } from '../../config/db.js';
+
 class EmailFilter {
   // Keywords that strongly indicate a quote email
   static STRONG_QUOTE_KEYWORDS = [
@@ -177,6 +179,24 @@ class EmailFilter {
   ];
 
   /**
+   * Check if an email is from a spammer (async database check)
+   * @param {Object} email - Email object from Microsoft Graph
+   * @returns {Promise<{isSpam: boolean, reason: string}>}
+   */
+  static async checkSpammer(email) {
+    const senderEmail = (email.from?.emailAddress?.address || '').toLowerCase();
+    if (!senderEmail) {
+      return { isSpam: false, reason: '' };
+    }
+
+    const spammerFound = await isSpammer(senderEmail);
+    if (spammerFound) {
+      return { isSpam: true, reason: `Blocked spammer: ${senderEmail}` };
+    }
+    return { isSpam: false, reason: '' };
+  }
+
+  /**
    * Calculate a score (0-100) indicating likelihood this is a quote email
    * @param {Object} email - Email object from Microsoft Graph
    * @returns {Object} { score, reason }
@@ -303,9 +323,19 @@ class EmailFilter {
    * Determine if email should be processed with Claude API
    * @param {Object} email - Email object
    * @param {number} threshold - Minimum score to process (default 30)
-   * @returns {Object} { shouldProcess, score, reason }
+   * @returns {Promise<Object>} { shouldProcess, score, reason }
    */
-  static shouldProcess(email, threshold = 30) {
+  static async shouldProcess(email, threshold = 30) {
+    // First check if sender is a spammer
+    const spamCheck = await this.checkSpammer(email);
+    if (spamCheck.isSpam) {
+      return {
+        shouldProcess: false,
+        score: 0,
+        reason: spamCheck.reason,
+      };
+    }
+
     const { score, reason } = this.calculateQuoteScore(email);
     return {
       shouldProcess: score >= threshold,
@@ -318,14 +348,14 @@ class EmailFilter {
    * Filter array of emails and separate into process/skip groups
    * @param {Array} emails - Array of email objects
    * @param {number} threshold - Score threshold
-   * @returns {Object} { toProcess, toSkip, summary }
+   * @returns {Promise<Object>} { toProcess, toSkip, summary }
    */
-  static filterEmails(emails, threshold = 30) {
+  static async filterEmails(emails, threshold = 30) {
     const toProcess = [];
     const toSkip = [];
 
     for (const email of emails) {
-      const result = this.shouldProcess(email, threshold);
+      const result = await this.shouldProcess(email, threshold);
 
       const emailWithScore = {
         ...email,
@@ -359,10 +389,10 @@ class EmailFilter {
    * Generate preview report of filtered emails
    * @param {Array} emails - Array of email objects
    * @param {number} threshold - Score threshold
-   * @returns {Object} Detailed preview data
+   * @returns {Promise<Object>} Detailed preview data
    */
-  static generatePreview(emails, threshold = 30) {
-    const { toProcess, toSkip, summary } = this.filterEmails(emails, threshold);
+  static async generatePreview(emails, threshold = 30) {
+    const { toProcess, toSkip, summary } = await this.filterEmails(emails, threshold);
 
     const preview = {
       threshold,
@@ -392,6 +422,7 @@ class EmailFilter {
 export default EmailFilter;
 export const {
   calculateQuoteScore,
+  checkSpammer,
   filterEmails,
   getFilterPreview,
   generatePreview,

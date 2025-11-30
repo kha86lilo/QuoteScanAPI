@@ -1119,6 +1119,88 @@ async function getHistoricalQuotesForMatching(excludeQuoteIds = [], options = {}
   }
 }
 
+// =====================================================
+// Spammers Functions
+// =====================================================
+
+/**
+ * Check if an email address is in the spammers list
+ * @param {string} emailAddress - Email address to check
+ * @returns {Promise<boolean>} - True if email is a spammer
+ */
+async function isSpammer(emailAddress) {
+  if (!emailAddress) return false;
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT COUNT(*) FROM spammers WHERE LOWER(email_address) = LOWER($1)',
+      [emailAddress]
+    );
+    return parseInt(result.rows[0].count) > 0;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get all spammers
+ * @returns {Promise<Array>} - Array of spammer entries
+ */
+async function getAllSpammers() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT * FROM spammers ORDER BY created_at DESC'
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Add a spammer to the list
+ * @param {string} emailAddress - Email address to block
+ * @param {string} reason - Optional reason for blocking
+ * @param {string} addedBy - Who added this spammer
+ * @returns {Promise<Object>} - Created spammer entry
+ */
+async function addSpammer(emailAddress, reason = null, addedBy = null) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO spammers (email_address, reason, added_by)
+       VALUES (LOWER($1), $2, $3)
+       ON CONFLICT (email_address) DO UPDATE SET
+         reason = COALESCE(EXCLUDED.reason, spammers.reason),
+         added_by = COALESCE(EXCLUDED.added_by, spammers.added_by)
+       RETURNING *`,
+      [emailAddress, reason, addedBy]
+    );
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Remove a spammer from the list
+ * @param {string} emailAddress - Email address to unblock
+ * @returns {Promise<boolean>} - True if removed
+ */
+async function removeSpammer(emailAddress) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM spammers WHERE LOWER(email_address) = LOWER($1) RETURNING spammer_id',
+      [emailAddress]
+    );
+    return result.rows.length > 0;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Get a quote by ID with fields needed for matching
  * @param {number} quoteId - Quote ID
@@ -1199,4 +1281,9 @@ export {
   // Historical quotes for matching
   getHistoricalQuotesForMatching,
   getQuoteForMatching,
+  // Spammers
+  isSpammer,
+  getAllSpammers,
+  addSpammer,
+  removeSpammer,
 };

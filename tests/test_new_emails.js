@@ -44,11 +44,12 @@ async function fetchAndProcessNewEmails() {
 
     const startDate = latestDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const emails = await microsoftGraphService.default.fetchEmails({
-      searchQuery: 'quote OR shipping OR freight OR cargo OR oversize OR overweight',
-      top: 50, // Fetch more to account for filtering
-      startDate: startDate,
-    });
+    const emails = await microsoftGraphService.default.fetchEmails({ 
+    maxEmails: 1000,
+    startDate: startDate ?? new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    scoreThreshold: 30,
+    previewMode: false,
+  });
 
     console.log(`${colors.green}✓ Fetched ${emails.length} emails from inbox${colors.reset}\n`);
 
