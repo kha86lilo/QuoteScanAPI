@@ -7,7 +7,9 @@
       "Bash(node test_new_emails.js:*)",
       "Bash(node count_emails.js:*)",
       "Bash(node process_external_emails.js:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(npx create-next-app:*)",
+      "Bash(npm run dev:*)"
     ],
     "deny": [],
     "ask": []

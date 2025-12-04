@@ -28,6 +28,14 @@ logs/
 dist/
 build/
 
+# Next.js (email-viewer)
+email-viewer/.next/
+email-viewer/out/
+email-viewer/node_modules/
+email-viewer/.env
+email-viewer/.env.local
+email-viewer/.env.*.local
+
 # Python (legacy files)
 __pycache__/
 *.py[cod]
