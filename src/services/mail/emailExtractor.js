@@ -67,7 +67,7 @@ class EmailExtractorService {
       console.log('STEP 1: PRE-FILTERING EMAILS');
       console.log(`${'='.repeat(60)}\n`);
 
-      const { toProcess, toSkip, summary } = emailFilter.filterEmails(emails, scoreThreshold);
+      const { toProcess, toSkip, summary } = await emailFilter.filterEmails(emails, scoreThreshold);
 
       results.filtered.toProcess = toProcess.length;
       results.filtered.toSkip = toSkip.length;
@@ -125,14 +125,8 @@ class EmailExtractorService {
             console.log(`  ⊘ Already processed, skipping`);
             results.processed.skipped++;
             continue;
-          }
-          let attachmentText = ''; 
-           if (email.hasAttachments) {
-            const { processEmailAttachments } = await import('../attachmentProcessor.js');
-            const attachmentResults = await processEmailAttachments(email.id);
-            attachmentText = attachmentResults.extractedText || '';
-          }
-          const parsedData = await aiService.parseEmail(email, 3, attachmentText);
+          } 
+          const parsedData = await aiService.parseEmail(email, 3, email.attachmentText);
 
           if (!parsedData) {
             results.processed.failed++;

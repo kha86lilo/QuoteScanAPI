@@ -17,7 +17,7 @@ class AttachmentProcessor {
     this.supportedTypes = {
       pdf: ['.pdf'],
       excel: ['.xlsx', '.xls', '.csv'],
-      image: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'],
+      image: ['.png', '.jpg', '.jpeg'],
     };
   }
 
@@ -62,9 +62,7 @@ class AttachmentProcessor {
         }
 
         try {
-          console.log(`  📄 Processing ${fileType.toUpperCase()}: ${fileName}`);
-
-          // Get attachment content (base64 encoded)
+          console.log(`Email Id ${emailId}  📄 Processing ${fileType.toUpperCase()}: ${fileName}`);
           const contentBytes = attachment.contentBytes;
           if (!contentBytes) {
             console.log(`  ⚠ No content available for ${fileName}`);
@@ -188,13 +186,62 @@ class AttachmentProcessor {
    */
   async extractFromImage(buffer) {
     try {
-      const result = await Tesseract.recognize(buffer, 'eng', {
+      // Validate buffer before processing to catch corrupt images early
+      if (!buffer || buffer.length === 0) {
+        console.error('  ✗ OCR error: Empty or invalid image buffer');
+        return '';
+      }
+
+      // Check for valid PNG header (first 8 bytes)
+      const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const jpgHeader = Buffer.from([0xff, 0xd8, 0xff]);
+
+      const isPng = buffer.length >= 8 && buffer.subarray(0, 8).equals(pngHeader);
+      const isJpg = buffer.length >= 3 && buffer.subarray(0, 3).equals(jpgHeader);
+
+      if (!isPng && !isJpg) {
+        console.error('  ✗ OCR error: Invalid or corrupt image format');
+        return '';
+      }
+
+      // Skip small images that are likely logos/signatures (< 5KB)
+      if (buffer.length < 5000) {
+        console.log('  ⊘ Skipping small image (likely logo/signature)');
+        return '';
+      }
+
+      // Create a worker for better error isolation
+      const worker = await Tesseract.createWorker('eng', 1, {
         logger: () => {}, // Suppress tesseract logs
+        errorHandler: (err) => {
+          console.error('  ✗ Tesseract worker error:', err.message);
+        },
       });
 
-      return result.data.text || '';
+      try {
+        // Use a timeout to prevent hanging on corrupt images
+        const recognizePromise = worker.recognize(buffer);
+        
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('OCR timeout after 15 seconds')), 15000)
+        );
+
+        const result = await Promise.race([recognizePromise, timeoutPromise]);
+        await worker.terminate();
+        
+        return result.data.text || '';
+      } catch (workerError) {
+        await worker.terminate();
+        throw workerError;
+      }
     } catch (error) {
-      console.error('  ✗ OCR error:', error.message);
+      // Handle various image processing errors including libpng errors
+      const errorMsg = error.message || String(error);
+      if (errorMsg.includes('libpng') || errorMsg.includes('bad adaptive filter')) {
+        console.error('  ✗ OCR error: Corrupt PNG image, skipping file');
+      } else {
+        console.error('  ✗ OCR error:', errorMsg);
+      }
       return '';
     }
   }

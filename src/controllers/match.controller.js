@@ -473,11 +473,14 @@ export const runMatchingForAllUnmatched = asyncHandler(async (req, res) => {
  * Body: { searchQuery?, maxEmails?, startDate?, scoreThreshold?, minScore?, maxMatches?, async? }
  */
 export const extractAndMatch = asyncHandler(async (req, res) => {
-  const lastProcessDate = await getLatestLastReceivedDateTime();
+  const lastProcessDate =
+    req.body.startDate ??
+    (await getLatestLastReceivedDateTime()) ??
+    new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(); // Default to 3 days ago
   const {
     searchQuery = '',
-    maxEmails = 300,
-    startDate = lastProcessDate ?? new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    maxEmails = 500,
+    startDate = lastProcessDate,
     scoreThreshold = 50,
     minScore = 0.5,
     maxMatches = 3,

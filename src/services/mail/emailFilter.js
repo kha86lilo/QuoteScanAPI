@@ -3,7 +3,8 @@
  * Pre-filters emails to identify likely quote requests before expensive API processing
  */
 
-import { isSpammer } from '../../config/db.js';
+import { checkEmailExists, isSpammer, } from '../../config/db.js';
+import { processEmailAttachments } from '../attachmentProcessor.js';
 
 class EmailFilter {
   // Keywords that strongly indicate a quote email
@@ -184,16 +185,61 @@ class EmailFilter {
    * @returns {Promise<{isSpam: boolean, reason: string}>}
    */
   static async checkSpammer(email) {
+    const subject = (email.subject || '').toLowerCase();
+    const bodyPreview = (email.bodyPreview || '').toLowerCase();
+    const content = `${subject} ${bodyPreview}`;
+    for (const keyword of EmailFilter.EXCLUDE_KEYWORDS) {
+      if (content.includes(keyword)) {
+        return { score: 0, reason: `Excluded: Contains '${keyword}'` };
+      }
+    }
+
     const senderEmail = (email.from?.emailAddress?.address || '').toLowerCase();
     if (!senderEmail) {
       return { isSpam: false, reason: '' };
     }
-
     const spammerFound = await isSpammer(senderEmail);
     if (spammerFound) {
       return { isSpam: true, reason: `Blocked spammer: ${senderEmail}` };
     }
     return { isSpam: false, reason: '' };
+  }
+
+  static async isToBeExcluded(email) {
+    const subject = (email.subject || '').toLowerCase();
+    const bodyPreview = (email.bodyPreview || '').toLowerCase();
+    const senderEmail = (email.from?.emailAddress?.address || '').toLowerCase();
+    const senderName = (email.from?.emailAddress?.name || '').toLowerCase();
+
+    // Extract sender domain
+    const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';
+
+    // Combine subject and preview for analysis
+    const content = `${subject} ${bodyPreview}`;
+
+    // 0. CRITICAL: Exclude internal Seahorse emails (outgoing quotes, not incoming requests)
+    if (senderDomain === 'seahorseexpress.com' || senderEmail.includes('seahorseexpress.com')) {
+      return { isExcluded: true, reason: 'Internal Seahorse email - outgoing quote (excluded)' };
+    }
+
+    // Exclude known Seahorse staff by name (in case emails come from personal addresses)
+    const seahorseStaff = [
+      'danny nasser',
+      'tina merkab',
+      'seahorse express',
+      // Add other staff names here
+    ];
+    if (seahorseStaff.some((name) => senderName.includes(name))) {
+      return { isExcluded: true, reason: `Known Seahorse staff: ${senderName} (excluded)` };
+    }
+
+    // 1. Check for exclusion keywords (immediate reject)
+    for (const keyword of EmailFilter.EXCLUDE_KEYWORDS) {
+      if (content.includes(keyword)) {
+        return { isExcluded: true, reason: `Excluded: Contains '${keyword}'` };
+      }
+    }
+    return { isExcluded: false, reason: '' };
   }
 
   /**
@@ -305,6 +351,48 @@ class EmailFilter {
       reasons.push('Has attachments');
     }
 
+    // 8b. Check attachment content if provided
+    if (email.attachmentText) {
+      const attachmentContent = email.attachmentText.toLowerCase();
+
+      // Check for strong keywords in attachment
+      const strongInAttachment = EmailFilter.STRONG_QUOTE_KEYWORDS.filter((kw) =>
+        attachmentContent.includes(kw)
+      ).length;
+      if (strongInAttachment > 0) {
+        score += 25;
+        reasons.push(`${strongInAttachment} strong keyword(s) in attachments`);
+      }
+
+      // Check for moderate keywords in attachment
+      const moderateInAttachment = EmailFilter.MODERATE_KEYWORDS.filter((kw) =>
+        attachmentContent.includes(kw)
+      ).length;
+      if (moderateInAttachment > 0) {
+        score += Math.min(moderateInAttachment * 3, 15);
+        reasons.push(`${moderateInAttachment} moderate keyword(s) in attachments`);
+      }
+
+      // Check for numbers in attachments (prices, weights, dimensions)
+      const attachmentHasDollar =
+        attachmentContent.includes('$') || attachmentContent.includes('usd');
+      const attachmentHasWeight = /\d+\s*(kg|lb|lbs|ton|tonnes)/i.test(attachmentContent);
+      const attachmentHasDimensions = /\d+\s*x\s*\d+\s*x\s*\d+/i.test(attachmentContent);
+
+      if (attachmentHasDollar) {
+        score += 8;
+        reasons.push('Attachment contains price ($)');
+      }
+      if (attachmentHasWeight) {
+        score += 8;
+        reasons.push('Attachment contains weight');
+      }
+      if (attachmentHasDimensions) {
+        score += 8;
+        reasons.push('Attachment contains dimensions');
+      }
+    }
+
     // 9. Warn about very long emails (might be email chains)
     if (email.bodyPreview.length > 5000) {
       score -= 10;
@@ -326,16 +414,6 @@ class EmailFilter {
    * @returns {Promise<Object>} { shouldProcess, score, reason }
    */
   static async shouldProcess(email, threshold = 30) {
-    // First check if sender is a spammer
-    const spamCheck = await this.checkSpammer(email);
-    if (spamCheck.isSpam) {
-      return {
-        shouldProcess: false,
-        score: 0,
-        reason: spamCheck.reason,
-      };
-    }
-
     const { score, reason } = this.calculateQuoteScore(email);
     return {
       shouldProcess: score >= threshold,
@@ -348,17 +426,74 @@ class EmailFilter {
    * Filter array of emails and separate into process/skip groups
    * @param {Array} emails - Array of email objects
    * @param {number} threshold - Score threshold
+   * @param {Object} options - Additional options
+   * @param {boolean} options.processAttachments - Whether to process attachments for scoring (default: true)
    * @returns {Promise<Object>} { toProcess, toSkip, summary }
    */
-  static async filterEmails(emails, threshold = 30) {
+  static async filterEmails(emails, threshold = 30, options = {}) {
+    const { processAttachments = true } = options;
     const toProcess = [];
     const toSkip = [];
 
     for (const email of emails) {
-      const result = await this.shouldProcess(email, threshold);
+      const spamCheck = await this.checkSpammer(email);
+
+      let emailWithAttachmentText = email;
+      if (spamCheck.isSpam) {
+        const emailWithScore = {
+          ...emailWithAttachmentText,
+          filterScore: 0,
+          filterReason: spamCheck.reason,
+        };
+        toSkip.push(emailWithScore);
+        continue;
+      }
+      
+      const exclusionCheck = await this.isToBeExcluded(email);
+      if (exclusionCheck.isExcluded) {
+        const emailWithScore = {
+          ...emailWithAttachmentText,
+          filterScore: 0,
+          filterReason: exclusionCheck.reason,
+        };
+        toSkip.push(emailWithScore);
+        continue;
+      }
+
+      // Check if already processed
+      const exists = await  checkEmailExists(email.id);
+      if (exists) {
+        console.log(`  ⊘ Already processed, skipping`);
+        const emailWithScore = {
+          ...emailWithAttachmentText,
+          filterScore: 0,
+          filterReason: 'Already processed',
+        };
+        toSkip.push(emailWithScore);
+        continue;
+      }
+      // Process attachments if the email has them and option is enabled
+      if (processAttachments && email.hasAttachments) {
+        try {
+          console.log(
+            `  📎 Fetching attachments for: ${(email.subject || 'No Subject').substring(0, 40)}...`
+          );
+          const attachmentResults = await processEmailAttachments(email.id);
+          if (attachmentResults.extractedText) {
+            emailWithAttachmentText = {
+              ...email,
+              attachmentText: attachmentResults.extractedText,
+            };
+          }
+        } catch (error) {
+          console.error(`  ⚠ Error processing attachments: ${error.message}`);
+        }
+      }
+
+      const result = await this.shouldProcess(emailWithAttachmentText, threshold);
 
       const emailWithScore = {
-        ...email,
+        ...emailWithAttachmentText,
         filterScore: result.score,
         filterReason: result.reason,
       };
@@ -389,10 +524,12 @@ class EmailFilter {
    * Generate preview report of filtered emails
    * @param {Array} emails - Array of email objects
    * @param {number} threshold - Score threshold
+   * @param {Object} options - Additional options
+   * @param {boolean} options.processAttachments - Whether to process attachments for scoring (default: true)
    * @returns {Promise<Object>} Detailed preview data
    */
-  static async generatePreview(emails, threshold = 30) {
-    const { toProcess, toSkip, summary } = await this.filterEmails(emails, threshold);
+  static async generatePreview(emails, threshold = 30, options = {}) {
+    const { toProcess, toSkip, summary } = await this.filterEmails(emails, threshold, options);
 
     const preview = {
       threshold,
@@ -404,6 +541,8 @@ class EmailFilter {
         score: email.filterScore,
         reason: email.filterReason,
         receivedDateTime: email.receivedDateTime,
+        hasAttachments: email.hasAttachments,
+        attachmentMeta: email.attachmentMeta || null,
       })),
       toSkip: toSkip.map((email) => ({
         id: email.id,
@@ -412,6 +551,8 @@ class EmailFilter {
         score: email.filterScore,
         reason: email.filterReason,
         receivedDateTime: email.receivedDateTime,
+        hasAttachments: email.hasAttachments,
+        attachmentMeta: email.attachmentMeta || null,
       })),
     };
 
@@ -423,6 +564,7 @@ export default EmailFilter;
 export const {
   calculateQuoteScore,
   checkSpammer,
+  isToBeExcluded,
   filterEmails,
   getFilterPreview,
   generatePreview,

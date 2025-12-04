@@ -10,7 +10,7 @@ import rateLimit from 'express-rate-limit';
  * Allows only 1 request per 60 seconds (configurable via env)
  */
 export const emailProcessingLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000, // 1 minute default
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 10000, // 10 minutes default
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1, // 1 request per window
   message: {
     success: false,
@@ -20,7 +20,7 @@ export const emailProcessingLimiter = rateLimit({
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   handler: (req, res) => {
-    const retryAfter = Math.ceil((req.rateLimit.resetTime - Date.now()) / 1000);
+    const retryAfter = Math.ceil((req.rateLimit.resetTime - Date.now()) / 600000);
     res.status(429).json({
       success: false,
       error: 'Too many processing requests',
