@@ -1,8 +1,9 @@
 'use client';
 
 import { EmailWithQuotes } from '@/types';
-import { Mail, Calendar, User, Paperclip, Building } from 'lucide-react';
+import { Mail, Calendar, Paperclip, Building } from 'lucide-react';
 import QuoteCard from './QuoteCard';
+import Attachments from './Attachments';
 
 interface EmailDetailsProps {
   email: EmailWithQuotes | null;
@@ -109,6 +110,12 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
           </details>
         )}
       </div>
+
+      {/* Attachments Section */}
+      <Attachments
+        emailId={email.email_id}
+        hasAttachments={email.email_has_attachments}
+      />
 
       {/* Quotes Section */}
       <div className="px-6 py-4">

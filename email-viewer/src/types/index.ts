@@ -67,6 +67,15 @@ export interface QuoteMatchFeedback {
   created_at: string;
 }
 
+export interface EmailAttachment {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  isInline: boolean;
+  lastModifiedDateTime: string;
+}
+
 export interface EmailWithQuotes extends ShippingEmail {
   quotes: QuoteWithMatches[];
 }
