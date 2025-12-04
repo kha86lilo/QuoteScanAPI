@@ -54,6 +54,20 @@ class ClaudeService extends BaseAIService {
   }
 
   /**
+   * Generate a response from a prompt
+   * @param {string} prompt - The prompt to send to the AI
+   * @returns {Promise<string>} The AI response text
+   */
+  async generateResponse(prompt) {
+    const message = await this.client.messages.create({
+      model: this.modelName,
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return message.content[0].text.trim();
+  }
+
+  /**
    * Validate Claude API key
    * @returns {Promise<boolean>}
    */

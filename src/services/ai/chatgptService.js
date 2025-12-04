@@ -61,6 +61,26 @@ class ChatGPTService extends BaseAIService {
   }
 
   /**
+   * Generate a response from a prompt
+   * @param {string} prompt - The prompt to send to the AI
+   * @returns {Promise<string>} The AI response text
+   */
+  async generateResponse(prompt) {
+    const completion = await this.client.chat.completions.create({
+      model: this.modelName,
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a shipping pricing analyst. Respond with only valid JSON.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    });
+    return (completion.choices?.[0]?.message?.content || '').trim();
+  }
+
+  /**
    * Validate OpenAI API key
    * @returns {Promise<boolean>}
    */

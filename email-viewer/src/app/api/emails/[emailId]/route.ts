@@ -3,9 +3,10 @@ import pool from '@/lib/db';
 
 export async function GET(
   request: Request,
-  { params }: { params: { emailId: string } }
+  { params }: { params: Promise<{ emailId: string }> }
 ) {
-  const emailId = parseInt(params.emailId);
+  const { emailId: emailIdParam } = await params;
+  const emailId = parseInt(emailIdParam);
 
   if (isNaN(emailId)) {
     return NextResponse.json({ error: 'Invalid email ID' }, { status: 400 });

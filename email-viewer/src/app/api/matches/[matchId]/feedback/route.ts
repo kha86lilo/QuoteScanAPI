@@ -3,9 +3,10 @@ import pool from '@/lib/db';
 
 export async function POST(
   request: Request,
-  { params }: { params: { matchId: string } }
+  { params }: { params: Promise<{ matchId: string }> }
 ) {
-  const matchId = parseInt(params.matchId);
+  const { matchId: matchIdParam } = await params;
+  const matchId = parseInt(matchIdParam);
 
   if (isNaN(matchId)) {
     return NextResponse.json({ error: 'Invalid match ID' }, { status: 400 });
@@ -52,9 +53,10 @@ export async function POST(
 
 export async function GET(
   request: Request,
-  { params }: { params: { matchId: string } }
+  { params }: { params: Promise<{ matchId: string }> }
 ) {
-  const matchId = parseInt(params.matchId);
+  const { matchId: matchIdParam } = await params;
+  const matchId = parseInt(matchIdParam);
 
   if (isNaN(matchId)) {
     return NextResponse.json({ error: 'Invalid match ID' }, { status: 400 });

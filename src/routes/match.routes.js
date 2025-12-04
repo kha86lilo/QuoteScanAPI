@@ -36,41 +36,60 @@ router.get('/feedback/criteria-performance', matchController.getMatchCriteriaPer
 // =====================================================
 
 /**
- * Run matching for specific quote IDs
+ * Run matching for specific quote IDs with AI-powered pricing
  * POST /api/matches/run
- * Body: { quoteIds: [1, 2, 3], minScore?: 0.5, maxMatches?: 10, algorithmVersion?: 'v1' }
+ * Body: { quoteIds: [1, 2, 3], minScore?: 0.45, maxMatches?: 10, useAI?: true }
  */
 router.post('/run', matchController.runMatchingForQuotes);
 
 /**
- * Run matching for all unmatched quotes
- * POST /api/matches/run-all
- * Body: { minScore?: 0.5, maxMatches?: 10, limit?: 100, algorithmVersion?: 'v1' }
+ * Get pricing suggestion with AI prompt for a quote
+ * GET /api/matches/pricing-suggestion/:quoteId
+ * Query params: limit (default 5)
  */
-router.post('/run-all', matchController.runMatchingForAllUnmatched);
+router.get('/pricing-suggestion/:quoteId', matchController.getPricingSuggestion);
 
 /**
- * Extract quotes from emails and run matching (combined operation)
+ * Analyze a quote request without saving (for testing/preview)
+ * POST /api/matches/analyze
+ * Body: { origin_city, destination_city, service_type, cargo_description, cargo_weight, ... }
+ */
+router.post('/analyze', matchController.analyzeQuoteRequest);
+
+/**
+ * Get smart pricing with feedback-based adjustments
+ * GET /api/matches/smart-pricing/:quoteId
+ */
+router.get('/smart-pricing/:quoteId', matchController.getSmartPricing);
+
+/**
+ * Trigger feedback learning to update matching weights
+ * POST /api/matches/learn
+ */
+router.post('/learn', matchController.triggerLearning);
+
+/**
+ * Record pricing outcome for a quote (for learning)
+ * POST /api/matches/pricing-outcome/:quoteId
+ * Body: { actualPriceQuoted, actualPriceAccepted, jobWon }
+ */
+router.post('/pricing-outcome/:quoteId', matchController.recordOutcome);
+
+/**
+ * Extract quotes from emails and run matching with AI-powered pricing
  * POST /api/matches/extract-and-match
  * Body: {
- *   searchQuery?: string,      // Email search query (default: 'quote OR shipping OR freight OR cargo')
- *   maxEmails?: number,        // Max emails to fetch (default: 50)
+ *   searchQuery?: string,      // Email search query
+ *   maxEmails?: number,        // Max emails to fetch (default: 500)
  *   startDate?: string,        // ISO date to start from
- *   scoreThreshold?: number,   // Email filter score threshold (default: 30)
- *   minScore?: number,         // Minimum match similarity score (default: 0.5)
+ *   scoreThreshold?: number,   // Email filter score threshold (default: 50)
+ *   minScore?: number,         // Minimum match similarity score (default: 0.45)
  *   maxMatches?: number,       // Max matches per quote (default: 3)
- *   algorithmVersion?: string, // Matching algorithm version (default: 'v1')
+ *   useAI?: boolean,           // Use AI for pricing recommendations (default: true)
  *   async?: boolean            // Run as background job (default: true)
  * }
  */
 router.post('/extract-and-match', matchController.extractAndMatch);
-
-/**
- * Re-run matching for a single quote (deletes existing matches first)
- * POST /api/matches/rematch/:quoteId
- * Body: { minScore?: 0.5, maxMatches?: 10, algorithmVersion?: 'v1' }
- */
-router.post('/rematch/:quoteId', matchController.rematchSingleQuote);
 
 // =====================================================
 // Match CRUD Operations

@@ -1,12 +1,21 @@
 'use client';
 
 import { ShippingEmail } from '@/types';
-import { Mail, Paperclip } from 'lucide-react';
+import { Mail, Paperclip, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+
+interface PaginationInfo {
+  currentPage: number;
+  totalPages: number;
+  totalCount: number;
+  limit: number;
+}
 
 interface EmailListProps {
   emails: ShippingEmail[];
   selectedEmailId: number | null;
   onSelectEmail: (emailId: number) => void;
+  pagination?: PaginationInfo;
+  onPageChange?: (page: number) => void;
 }
 
 function formatDate(dateString: string): string {
@@ -23,14 +32,18 @@ function formatDate(dateString: string): string {
   }
 }
 
-export default function EmailList({ emails, selectedEmailId, onSelectEmail }: EmailListProps) {
+export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagination, onPageChange }: EmailListProps) {
+  const showPagination = pagination && pagination.totalPages > 1 && onPageChange;
+
   return (
-    <div className="h-full overflow-y-auto bg-white">
-      <div className="sticky top-0 bg-white border-b border-outlook-border px-4 py-3 z-10">
+    <div className="h-full flex flex-col bg-white">
+      <div className="flex-shrink-0 bg-white border-b border-outlook-border px-4 py-3 z-10">
         <h2 className="text-sm font-semibold text-outlook-text">Inbox</h2>
-        <p className="text-xs text-outlook-textLight">{emails.length} messages</p>
+        <p className="text-xs text-outlook-textLight">
+          {pagination ? `${pagination.totalCount} messages` : `${emails.length} messages`}
+        </p>
       </div>
-      <div className="divide-y divide-outlook-border">
+      <div className="flex-1 overflow-y-auto divide-y divide-outlook-border">
         {emails.map((email) => (
           <div
             key={email.email_id}
@@ -85,6 +98,54 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail }: Em
           </div>
         )}
       </div>
+
+      {/* Pagination Controls */}
+      {showPagination && (
+        <div className="flex-shrink-0 border-t border-outlook-border px-4 py-2 bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-outlook-textLight">
+              Page {pagination.currentPage} of {pagination.totalPages}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onPageChange(1)}
+                disabled={pagination.currentPage === 1}
+                className="p-1 rounded hover:bg-outlook-hover disabled:opacity-30 disabled:cursor-not-allowed"
+                title="First page"
+              >
+                <ChevronsLeft className="w-4 h-4 text-outlook-text" />
+              </button>
+              <button
+                onClick={() => onPageChange(pagination.currentPage - 1)}
+                disabled={pagination.currentPage === 1}
+                className="p-1 rounded hover:bg-outlook-hover disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Previous page"
+              >
+                <ChevronLeft className="w-4 h-4 text-outlook-text" />
+              </button>
+              <span className="px-2 text-sm text-outlook-text font-medium">
+                {pagination.currentPage}
+              </span>
+              <button
+                onClick={() => onPageChange(pagination.currentPage + 1)}
+                disabled={pagination.currentPage === pagination.totalPages}
+                className="p-1 rounded hover:bg-outlook-hover disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Next page"
+              >
+                <ChevronRight className="w-4 h-4 text-outlook-text" />
+              </button>
+              <button
+                onClick={() => onPageChange(pagination.totalPages)}
+                disabled={pagination.currentPage === pagination.totalPages}
+                className="p-1 rounded hover:bg-outlook-hover disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Last page"
+              >
+                <ChevronsRight className="w-4 h-4 text-outlook-text" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

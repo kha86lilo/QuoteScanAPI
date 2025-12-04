@@ -23,6 +23,10 @@ const MIGRATIONS = [
     file: '002_create_spammers_table.sql',
     tables: ['spammers'],
   },
+  {
+    file: '003_create_matching_weights_table.sql',
+    tables: ['matching_weight_adjustments', 'pricing_history', 'lane_pricing_stats'],
+  },
 ];
 
 async function runMigration(migrationNumber = null) {

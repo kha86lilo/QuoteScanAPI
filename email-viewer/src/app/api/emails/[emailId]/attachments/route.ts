@@ -18,6 +18,7 @@ async function getAccessToken(): Promise<string> {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: params.toString(),
+    cache: 'no-store',
   });
 
   if (!response.ok) {
@@ -37,6 +38,7 @@ async function fetchAttachments(messageId: string): Promise<any[]> {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    cache: 'no-store',
   });
 
   if (!response.ok) {
@@ -50,9 +52,10 @@ async function fetchAttachments(messageId: string): Promise<any[]> {
 
 export async function GET(
   request: Request,
-  { params }: { params: { emailId: string } }
+  { params }: { params: Promise<{ emailId: string }> }
 ) {
-  const emailId = parseInt(params.emailId);
+  const { emailId: emailIdParam } = await params;
+  const emailId = parseInt(emailIdParam);
 
   if (isNaN(emailId)) {
     return NextResponse.json({ error: 'Invalid email ID' }, { status: 400 });

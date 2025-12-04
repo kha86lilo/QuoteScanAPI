@@ -10,7 +10,16 @@ import {
   DatabaseError,
   ValidationError,
 } from '../middleware/errorHandler.js';
-import { processMatchesForNewQuotes, rematchQuote } from '../services/quoteMatchingService.js';
+import {
+  processEnhancedMatches,
+  findEnhancedMatches,
+  generatePricingPrompt,
+  normalizeServiceType,
+  classifyCargo,
+  learnFromFeedback,
+  recordPricingOutcome,
+  suggestPriceWithFeedback,
+} from '../services/enhancedQuoteMatchingService.js';
 import emailExtractorService from '../services/mail/emailExtractor.js';
 import jobProcessor from '../services/jobProcessor.js';
 import { getLatestLastReceivedDateTime } from '../config/db.js';
@@ -319,149 +328,6 @@ export const getMatchCriteriaPerformance = asyncHandler(async (req, res) => {
   }
 });
 
-// =====================================================
-// Matching Algorithm Endpoints
-// =====================================================
-
-/**
- * Run matching for specific quote IDs
- * POST /api/matches/run
- * Body: { quoteIds: [1, 2, 3], minScore?: 0.5, maxMatches?: 10 }
- */
-export const runMatchingForQuotes = asyncHandler(async (req, res) => {
-  const { quoteIds, minScore = 0.5, maxMatches = 10, algorithmVersion = 'v1' } = req.body;
-
-  if (!quoteIds || !Array.isArray(quoteIds) || quoteIds.length === 0) {
-    throw new ValidationError('quoteIds array is required and cannot be empty');
-  }
-
-  // Validate quote IDs are numbers
-  for (const id of quoteIds) {
-    if (typeof id !== 'number' || !Number.isInteger(id)) {
-      throw new ValidationError('All quoteIds must be integers');
-    }
-  }
-
-  try {
-    const results = await processMatchesForNewQuotes(quoteIds, {
-      minScore,
-      maxMatches,
-      algorithmVersion,
-    });
-
-    res.json({
-      success: true,
-      message: `Matching completed for ${results.processed} quotes`,
-      results: {
-        quotesProcessed: results.processed,
-        matchesCreated: results.matchesCreated,
-        errors: results.errors,
-      },
-    });
-  } catch (error) {
-    throw new DatabaseError('running matching algorithm', error);
-  }
-});
-
-/**
- * Re-run matching for a single quote (deletes existing matches first)
- * POST /api/matches/rematch/:quoteId
- */
-export const rematchSingleQuote = asyncHandler(async (req, res) => {
-  const { quoteId } = req.params;
-  const { minScore = 0.5, maxMatches = 10, algorithmVersion = 'v1' } = req.body;
-
-  const quoteIdInt = parseInt(quoteId);
-  if (isNaN(quoteIdInt)) {
-    throw new ValidationError('quoteId must be a valid integer');
-  }
-
-  // Verify quote exists
-  const quote = await db.getQuoteForMatching(quoteIdInt);
-  if (!quote) {
-    throw new NotFoundError(`Quote with ID: ${quoteId}`);
-  }
-
-  try {
-    const results = await rematchQuote(quoteIdInt, {
-      minScore,
-      maxMatches,
-      algorithmVersion,
-    });
-
-    res.json({
-      success: true,
-      message: `Re-matching completed for quote ${quoteId}`,
-      results: {
-        quotesProcessed: results.processed,
-        matchesCreated: results.matchesCreated,
-        errors: results.errors,
-      },
-    });
-  } catch (error) {
-    throw new DatabaseError('re-matching quote', error);
-  }
-});
-
-/**
- * Run matching for all unmatched quotes
- * POST /api/matches/run-all
- * Body: { minScore?: 0.5, maxMatches?: 10, limit?: 100 }
- */
-export const runMatchingForAllUnmatched = asyncHandler(async (req, res) => {
-  const { minScore = 0.5, maxMatches = 10, limit = 100, algorithmVersion = 'v1' } = req.body;
-
-  try {
-    // Get quotes that don't have any matches yet
-    const client = await db.pool.connect();
-    let unmatchedQuoteIds;
-    try {
-      const result = await client.query(
-        `SELECT q.quote_id
-         FROM shipping_quotes q
-         LEFT JOIN quote_matches m ON q.quote_id = m.source_quote_id
-         WHERE m.match_id IS NULL
-         ORDER BY q.created_at DESC
-         LIMIT $1`,
-        [limit]
-      );
-      unmatchedQuoteIds = result.rows.map((r) => r.quote_id);
-    } finally {
-      client.release();
-    }
-
-    if (unmatchedQuoteIds.length === 0) {
-      return res.json({
-        success: true,
-        message: 'No unmatched quotes found',
-        results: {
-          quotesProcessed: 0,
-          matchesCreated: 0,
-          errors: [],
-        },
-      });
-    }
-
-    const results = await processMatchesForNewQuotes(unmatchedQuoteIds, {
-      minScore,
-      maxMatches,
-      algorithmVersion,
-    });
-
-    res.json({
-      success: true,
-      message: `Matching completed for ${results.processed} unmatched quotes`,
-      results: {
-        unmatchedFound: unmatchedQuoteIds.length,
-        quotesProcessed: results.processed,
-        matchesCreated: results.matchesCreated,
-        errors: results.errors,
-      },
-    });
-  } catch (error) {
-    throw new DatabaseError('running matching for unmatched quotes', error);
-  }
-});
 
 // =====================================================
 // Extract and Match Combined Endpoints
@@ -470,7 +336,7 @@ export const runMatchingForAllUnmatched = asyncHandler(async (req, res) => {
 /**
  * Extract quotes from emails and run matching (async job)
  * POST /api/matches/extract-and-match
- * Body: { searchQuery?, maxEmails?, startDate?, scoreThreshold?, minScore?, maxMatches?, async? }
+ * Body: { searchQuery?, maxEmails?, startDate?, scoreThreshold?, minScore?, maxMatches?, useAI?, async? }
  */
 export const extractAndMatch = asyncHandler(async (req, res) => {
   const lastProcessDate =
@@ -482,9 +348,9 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
     maxEmails = 500,
     startDate = lastProcessDate,
     scoreThreshold = 50,
-    minScore = 0.5,
+    minScore = 0.45,
     maxMatches = 3,
-    algorithmVersion = 'v1',
+    useAI = true,
     async = true,
   } = req.body;
 
@@ -493,19 +359,16 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
     maxEmails,
     startDate,
     scoreThreshold,
-    // Include matching options in job data
     matchingOptions: {
       minScore,
       maxMatches,
-      algorithmVersion,
+      useAI,
     },
   };
 
   if (async) {
-    // Create job for async processing
     const jobId = await jobProcessor.createJob(jobData);
 
-    // Start processing in background with matching
     processExtractAndMatchJob(jobId, jobData).catch((err) => {
       console.error(`Unhandled error in extract-and-match job ${jobId}:`, err);
     });
@@ -523,7 +386,6 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
 
   // Synchronous processing
   try {
-    // Step 1: Extract quotes from emails
     const extractionResults = await emailExtractorService.processEmails({
       searchQuery,
       maxEmails,
@@ -531,14 +393,13 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
       scoreThreshold,
     });
 
-    // Step 2: Run matching on newly extracted quotes
-    let matchingResults = { processed: 0, matchesCreated: 0, errors: [] };
+    let matchingResults = { processed: 0, matchesCreated: 0, errors: [], matchDetails: [] };
 
     if (extractionResults.newQuoteIds && extractionResults.newQuoteIds.length > 0) {
-      matchingResults = await processMatchesForNewQuotes(extractionResults.newQuoteIds, {
+      matchingResults = await processEnhancedMatches(extractionResults.newQuoteIds, {
         minScore,
         maxMatches,
-        algorithmVersion,
+        useAI,
       });
     }
 
@@ -555,6 +416,7 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
         matching: {
           quotesProcessed: matchingResults.processed,
           matchesCreated: matchingResults.matchesCreated,
+          matchDetails: matchingResults.matchDetails,
           errors: matchingResults.errors,
         },
       },
@@ -564,12 +426,220 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
   }
 });
 
+// =====================================================
+// Matching Endpoints
+// =====================================================
+
+/**
+ * Run matching for specific quote IDs
+ * POST /api/matches/run
+ * Body: { quoteIds: [1, 2, 3], minScore?: 0.45, maxMatches?: 10, useAI?: true }
+ */
+export const runMatchingForQuotes = asyncHandler(async (req, res) => {
+  const { quoteIds, minScore = 0.45, maxMatches = 10, useAI = true } = req.body;
+
+  if (!quoteIds || !Array.isArray(quoteIds) || quoteIds.length === 0) {
+    throw new ValidationError('quoteIds array is required and cannot be empty');
+  }
+
+  for (const id of quoteIds) {
+    if (typeof id !== 'number' || !Number.isInteger(id)) {
+      throw new ValidationError('All quoteIds must be integers');
+    }
+  }
+
+  try {
+    const results = await processEnhancedMatches(quoteIds, {
+      minScore,
+      maxMatches,
+      useAI,
+    });
+
+    res.json({
+      success: true,
+      message: `Matching completed for ${results.processed} quotes`,
+      results: {
+        quotesProcessed: results.processed,
+        matchesCreated: results.matchesCreated,
+        matchDetails: results.matchDetails,
+        errors: results.errors,
+      },
+    });
+  } catch (error) {
+    throw new DatabaseError('running matching algorithm', error);
+  }
+});
+
+/**
+ * Get pricing suggestion with AI prompt for a quote
+ * GET /api/matches/pricing-suggestion/:quoteId
+ * Returns matches + AI prompt for pricing recommendation
+ */
+export const getPricingSuggestion = asyncHandler(async (req, res) => {
+  const { quoteId } = req.params;
+  const limit = parseInt(req.query.limit) || 5;
+
+  const quoteIdInt = parseInt(quoteId);
+  if (isNaN(quoteIdInt)) {
+    throw new ValidationError('quoteId must be a valid integer');
+  }
+
+  try {
+    // Get the source quote
+    const sourceQuote = await db.getQuoteForMatching(quoteIdInt);
+    if (!sourceQuote) {
+      throw new NotFoundError(`Quote with ID: ${quoteId}`);
+    }
+
+    // Get historical quotes for matching
+    const historicalQuotes = await db.getHistoricalQuotesForMatching([quoteIdInt], {
+      limit: 500,
+      onlyWithPrice: true,
+    });
+
+    // Find enhanced matches
+    const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
+      minScore: 0.3,
+      maxMatches: limit,
+    });
+
+    // Generate pricing prompt
+    const pricingPrompt = generatePricingPrompt(sourceQuote, matches);
+
+    // Calculate aggregate suggested price
+    let aggregateSuggestion = null;
+    if (matches.length > 0) {
+      const pricesWithConfidence = matches
+        .filter(m => m.suggestedPrice && m.suggestedPrice > 0)
+        .map(m => ({
+          price: m.suggestedPrice,
+          confidence: m.priceConfidence,
+          weight: m.similarityScore * m.priceConfidence,
+        }));
+
+      if (pricesWithConfidence.length > 0) {
+        const totalWeight = pricesWithConfidence.reduce((sum, p) => sum + p.weight, 0);
+        const weightedAvg = pricesWithConfidence.reduce((sum, p) => sum + p.price * p.weight, 0) / totalWeight;
+
+        const prices = pricesWithConfidence.map(p => p.price);
+        aggregateSuggestion = {
+          weightedAverage: Math.round(weightedAvg),
+          range: {
+            low: Math.round(Math.min(...prices) * 0.9),
+            high: Math.round(Math.max(...prices) * 1.1),
+          },
+          confidence: Math.round((totalWeight / pricesWithConfidence.length) * 100) / 100,
+          basedOn: pricesWithConfidence.length,
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      quoteId: quoteIdInt,
+      sourceQuote: {
+        route: `${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_country || ''}`,
+        service: sourceQuote.service_type,
+        normalizedService: normalizeServiceType(sourceQuote.service_type),
+        cargo: sourceQuote.cargo_description,
+        cargoCategory: classifyCargo(sourceQuote.cargo_description),
+        weight: sourceQuote.cargo_weight,
+        weightUnit: sourceQuote.weight_unit,
+      },
+      matchCount: matches.length,
+      aggregateSuggestion,
+      topMatches: matches.slice(0, 5),
+      pricingPrompt,
+    });
+  } catch (error) {
+    if (error instanceof NotFoundError) throw error;
+    throw new DatabaseError('generating pricing suggestion', error);
+  }
+});
+
+/**
+ * Analyze a quote request (for debugging/testing matching)
+ * POST /api/matches/analyze
+ * Body: { origin_city, destination_city, service_type, cargo_description, cargo_weight, ... }
+ */
+export const analyzeQuoteRequest = asyncHandler(async (req, res) => {
+  const {
+    origin_city,
+    origin_state_province,
+    origin_country = 'USA',
+    destination_city,
+    destination_state_province,
+    destination_country = 'USA',
+    service_type,
+    cargo_description,
+    cargo_weight,
+    weight_unit = 'lbs',
+    number_of_pieces = 1,
+    hazardous_material = false,
+  } = req.body;
+
+  // Build a virtual quote object for analysis
+  const virtualQuote = {
+    quote_id: -1, // Virtual quote
+    origin_city,
+    origin_state_province,
+    origin_country,
+    destination_city,
+    destination_state_province,
+    destination_country,
+    service_type,
+    cargo_description,
+    cargo_weight,
+    weight_unit,
+    number_of_pieces,
+    hazardous_material,
+  };
+
+  try {
+    // Get historical quotes
+    const historicalQuotes = await db.getHistoricalQuotesForMatching([], {
+      limit: 500,
+      onlyWithPrice: true,
+    });
+
+    // Find matches
+    const matches = findEnhancedMatches(virtualQuote, historicalQuotes, {
+      minScore: 0.3,
+      maxMatches: 10,
+    });
+
+    // Generate pricing prompt
+    const pricingPrompt = generatePricingPrompt(virtualQuote, matches);
+
+    res.json({
+      success: true,
+      analysis: {
+        normalizedServiceType: normalizeServiceType(service_type),
+        cargoCategory: classifyCargo(cargo_description),
+        route: `${origin_city || 'Unknown'}, ${origin_country} → ${destination_city || 'Unknown'}, ${destination_country}`,
+      },
+      matchCount: matches.length,
+      topMatches: matches.slice(0, 5).map(m => ({
+        matchedQuoteId: m.matchedQuoteId,
+        similarityScore: m.similarityScore,
+        suggestedPrice: m.suggestedPrice,
+        priceRange: m.priceRange,
+        confidence: m.priceConfidence,
+        matchCriteria: m.matchCriteria,
+        matchedQuoteData: m.matchedQuoteData,
+      })),
+      pricingPrompt,
+    });
+  } catch (error) {
+    throw new DatabaseError('analyzing quote request', error);
+  }
+});
+
 /**
  * Helper function to process extract-and-match job asynchronously
  */
 async function processExtractAndMatchJob(jobId, jobData) {
   try {
-    // Update status to processing
     await jobProcessor.updateJob(jobId, {
       status: 'processing',
       startedAt: new Date().toISOString(),
@@ -577,7 +647,6 @@ async function processExtractAndMatchJob(jobId, jobData) {
 
     console.log(`\nStarting extract-and-match job ${jobId}...`);
 
-    // Step 1: Extract quotes from emails
     const extractionResults = await emailExtractorService.processEmails({
       searchQuery: jobData.searchQuery,
       maxEmails: jobData.maxEmails,
@@ -585,19 +654,49 @@ async function processExtractAndMatchJob(jobId, jobData) {
       scoreThreshold: jobData.scoreThreshold,
     });
 
-    // Step 2: Run matching on newly extracted quotes
-    let matchingResults = { processed: 0, matchesCreated: 0, errors: [] };
+    let matchingResults = { processed: 0, matchesCreated: 0, errors: [], matchDetails: [] };
 
     if (extractionResults.newQuoteIds && extractionResults.newQuoteIds.length > 0) {
-      const { minScore, maxMatches, algorithmVersion } = jobData.matchingOptions;
-      matchingResults = await processMatchesForNewQuotes(extractionResults.newQuoteIds, {
+      const { minScore = 0.45, maxMatches = 10, useAI = true } = jobData.matchingOptions || {};
+
+      matchingResults = await processEnhancedMatches(extractionResults.newQuoteIds, {
         minScore,
         maxMatches,
-        algorithmVersion,
+        useAI,
       });
+
+      if (matchingResults.matchDetails && matchingResults.matchDetails.length > 0) {
+        for (const detail of matchingResults.matchDetails) {
+          try {
+            await recordPricingOutcome(detail.quoteId, {
+              suggestedPrice: detail.suggestedPrice,
+              priceConfidence: detail.aiPricing ?
+                (detail.aiPricing.confidence === 'HIGH' ? 0.9 : detail.aiPricing.confidence === 'MEDIUM' ? 0.7 : 0.5) :
+                (detail.priceRange ? 0.7 : 0.5),
+              matchCount: detail.matchCount,
+              topMatchScore: detail.bestScore,
+            });
+          } catch (err) {
+            console.log(`  Note: Could not record pricing outcome for quote ${detail.quoteId}: ${err.message}`);
+          }
+        }
+      }
     }
 
-    // Update job with combined results
+    // Periodically trigger learning from feedback
+    const shouldLearn = extractionResults.newQuoteIds &&
+                       extractionResults.newQuoteIds.length > 0 &&
+                       Math.random() < 0.1;
+
+    let learningResults = null;
+    if (shouldLearn) {
+      try {
+        learningResults = await learnFromFeedback();
+      } catch (err) {
+        console.log(`  Note: Feedback learning skipped: ${err.message}`);
+      }
+    }
+
     await jobProcessor.updateJob(jobId, {
       status: 'completed',
       completedAt: new Date().toISOString(),
@@ -612,8 +711,10 @@ async function processExtractAndMatchJob(jobId, jobData) {
         matching: {
           quotesProcessed: matchingResults.processed,
           matchesCreated: matchingResults.matchesCreated,
+          matchDetails: matchingResults.matchDetails,
           errors: matchingResults.errors,
         },
+        learning: learningResults,
       },
       progress: {
         current: extractionResults.fetched,
@@ -636,3 +737,120 @@ async function processExtractAndMatchJob(jobId, jobData) {
     });
   }
 }
+
+// =====================================================
+// Feedback Learning Endpoints
+// =====================================================
+
+/**
+ * Trigger feedback learning to update weight adjustments
+ * POST /api/matches/learn
+ */
+export const triggerLearning = asyncHandler(async (req, res) => {
+  try {
+    const results = await learnFromFeedback();
+
+    res.json({
+      success: true,
+      message: results.success ? 'Learning completed' : 'Learning failed',
+      results,
+    });
+  } catch (error) {
+    throw new DatabaseError('triggering feedback learning', error);
+  }
+});
+
+/**
+ * Record pricing outcome for a quote (for learning)
+ * POST /api/matches/pricing-outcome/:quoteId
+ * Body: { actualPriceQuoted, actualPriceAccepted, jobWon }
+ */
+export const recordOutcome = asyncHandler(async (req, res) => {
+  const { quoteId } = req.params;
+  const { actualPriceQuoted, actualPriceAccepted, jobWon } = req.body;
+
+  const quoteIdInt = parseInt(quoteId);
+  if (isNaN(quoteIdInt)) {
+    throw new ValidationError('quoteId must be a valid integer');
+  }
+
+  try {
+    const result = await recordPricingOutcome(quoteIdInt, {
+      actualPriceQuoted,
+      actualPriceAccepted,
+      jobWon,
+    });
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quote not found or pricing history table not available',
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Pricing outcome recorded',
+      outcome: result,
+    });
+  } catch (error) {
+    throw new DatabaseError('recording pricing outcome', error);
+  }
+});
+
+/**
+ * Get enhanced pricing suggestion with feedback-based adjustments
+ * GET /api/matches/smart-pricing/:quoteId
+ */
+export const getSmartPricing = asyncHandler(async (req, res) => {
+  const { quoteId } = req.params;
+
+  const quoteIdInt = parseInt(quoteId);
+  if (isNaN(quoteIdInt)) {
+    throw new ValidationError('quoteId must be a valid integer');
+  }
+
+  try {
+    // Get the source quote
+    const sourceQuote = await db.getQuoteForMatching(quoteIdInt);
+    if (!sourceQuote) {
+      throw new NotFoundError(`Quote with ID: ${quoteId}`);
+    }
+
+    // Get historical quotes for matching
+    const historicalQuotes = await db.getHistoricalQuotesForMatching([quoteIdInt], {
+      limit: 500,
+      onlyWithPrice: true,
+    });
+
+    // Find enhanced matches
+    const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
+      minScore: 0.3,
+      maxMatches: 10,
+    });
+
+    // Get smart pricing with feedback adjustments
+    const smartPricing = await suggestPriceWithFeedback(sourceQuote, matches);
+
+    res.json({
+      success: true,
+      quoteId: quoteIdInt,
+      sourceQuote: {
+        route: `${sourceQuote.origin_city || 'Unknown'} → ${sourceQuote.destination_city || 'Unknown'}`,
+        service: sourceQuote.service_type,
+        cargo: sourceQuote.cargo_description,
+      },
+      smartPricing,
+      matchCount: matches.length,
+      topMatches: matches.slice(0, 3).map(m => ({
+        matchedQuoteId: m.matchedQuoteId,
+        score: m.similarityScore,
+        suggestedPrice: m.suggestedPrice,
+        route: `${m.matchedQuoteData.origin} → ${m.matchedQuoteData.destination}`,
+      })),
+    });
+  } catch (error) {
+    if (error instanceof NotFoundError) throw error;
+    throw new DatabaseError('generating smart pricing', error);
+  }
+});

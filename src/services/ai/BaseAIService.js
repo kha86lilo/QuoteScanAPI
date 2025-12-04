@@ -576,4 +576,106 @@ Return complete, accurate JSON following this structure exactly.`;
   async validateApiKey() {
     throw new Error('validateApiKey() must be implemented by child class');
   }
+
+  /**
+   * Abstract method - must be implemented by child classes
+   * Generate a response from a prompt
+   * @param {string} prompt - The prompt to send to the AI
+   * @returns {Promise<string>} The AI response text
+   */
+  async generateResponse(prompt) {
+    throw new Error('generateResponse() must be implemented by child class');
+  }
+
+  /**
+   * Get pricing recommendation from AI based on quote and historical matches
+   * @param {Object} sourceQuote - The quote to price
+   * @param {Array} matches - Historical similar matches
+   * @returns {Promise<Object|null>} Pricing recommendation
+   */
+  async getPricingRecommendation(sourceQuote, matches) {
+    const prompt = this.getPricingPrompt(sourceQuote, matches);
+
+    return await this.withRetry(async () => {
+      const responseText = await this.generateResponse(prompt);
+      const parsedData = this.cleanAndParseResponse(responseText);
+
+      console.log(`  ✓ Generated pricing recommendation with ${this.serviceName}`);
+      return parsedData;
+    }, 2);
+  }
+
+  /**
+   * Get the pricing recommendation prompt
+   * @param {Object} sourceQuote - Quote to price
+   * @param {Array} matches - Historical matches
+   * @returns {string} AI prompt for pricing
+   */
+  getPricingPrompt(sourceQuote, matches) {
+    const topMatches = matches.slice(0, 5);
+
+    return `You are a senior pricing analyst at a drayage and transportation company with 15+ years of experience. Your role is to provide accurate, competitive quotes that win business while maintaining profitability.
+
+## YOUR EXPERTISE
+- Deep knowledge of US port operations and drayage rates
+- Understanding of trucking lane rates and fuel surcharges
+- Experience with project cargo and heavy haul pricing
+- Familiarity with ocean freight market conditions
+- Knowledge of transloading and warehouse handling costs
+
+## QUOTE REQUEST TO PRICE
+- **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}
+- **Service Type**: ${sourceQuote.service_type || 'Not specified'}
+- **Cargo Description**: ${sourceQuote.cargo_description || 'Not specified'}
+- **Weight**: ${sourceQuote.cargo_weight || 'Not specified'} ${sourceQuote.weight_unit || ''}
+- **Pieces**: ${sourceQuote.number_of_pieces || 'Not specified'}
+- **Dimensions**: ${sourceQuote.cargo_length ? `${sourceQuote.cargo_length} x ${sourceQuote.cargo_width} x ${sourceQuote.cargo_height} ${sourceQuote.dimension_unit || ''}` : 'Not specified'}
+- **Hazmat**: ${sourceQuote.hazardous_material ? 'Yes' : 'No'}
+
+## SIMILAR HISTORICAL QUOTES FOR REFERENCE
+${topMatches.map((m, i) => `
+### Match ${i + 1} (${(m.similarityScore * 100).toFixed(0)}% similar)
+- Route: ${m.matchedQuoteData?.origin || 'Unknown'} → ${m.matchedQuoteData?.destination || 'Unknown'}
+- Service: ${m.matchedQuoteData?.service || 'Unknown'}
+- Cargo: ${m.matchedQuoteData?.cargo || 'Not specified'}
+- Initial Quote: $${m.matchedQuoteData?.initialPrice?.toLocaleString() || 'N/A'}
+- Final Agreed Price: $${m.matchedQuoteData?.finalPrice?.toLocaleString() || 'N/A'}
+- Date: ${m.matchedQuoteData?.quoteDate ? new Date(m.matchedQuoteData.quoteDate).toLocaleDateString() : 'Unknown'}
+- Status: ${m.matchedQuoteData?.status || 'Unknown'}
+`).join('\n')}
+
+## PRICING FACTORS TO CONSIDER
+- Mileage-based rates ($2.50-4.50 per mile for FTL)
+- Fuel surcharge (currently ~25-35% of linehaul)
+- Accessorials (liftgate, inside delivery, detention)
+- Lane density (headhaul vs backhaul)
+- Equipment type premiums (flatbed +15-25%)
+- Port/terminal fees for drayage
+
+## MARGIN GUIDELINES
+- Standard business: 15-25% gross margin
+- Competitive lanes: 10-15% margin acceptable
+- Project cargo/heavy haul: 20-35% margin
+- Expedited/rush: Add 25-50% premium
+
+## OUTPUT FORMAT
+Return ONLY valid JSON (no markdown, no explanation):
+
+{
+  "recommended_price": 0.00,
+  "floor_price": 0.00,
+  "target_price": 0.00,
+  "ceiling_price": 0.00,
+  "confidence": "HIGH|MEDIUM|LOW",
+  "price_breakdown": {
+    "linehaul": 0.00,
+    "fuel_surcharge": 0.00,
+    "accessorials": 0.00,
+    "margin": 0.00
+  },
+  "reasoning": "Brief explanation of pricing logic",
+  "market_factors": ["Factor 1", "Factor 2"],
+  "negotiation_room_percent": 10
+}`;
+  }
 }

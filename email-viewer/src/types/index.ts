@@ -85,3 +85,13 @@ export interface QuoteWithMatches extends ShippingQuote {
   top_suggested_price: number | null;
   avg_suggested_price: number | null;
 }
+
+export interface PaginatedEmailsResponse {
+  emails: ShippingEmail[];
+  totalCount: number;
+  totalPages: number;
+  currentPage: number;
+  limit: number;
+  offset: number;
+  minDate: string;
+}

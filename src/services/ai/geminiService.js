@@ -52,6 +52,18 @@ class GeminiService extends BaseAIService {
   }
 
   /**
+   * Generate a response from a prompt
+   * @param {string} prompt - The prompt to send to the AI
+   * @returns {Promise<string>} The AI response text
+   */
+  async generateResponse(prompt) {
+    const result = await this.model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
+    return (await result.response.text()).trim();
+  }
+
+  /**
    * Validate Gemini API key
    * @returns {Promise<boolean>}
    */

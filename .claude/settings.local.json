@@ -9,7 +9,9 @@
       "Bash(node process_external_emails.js:*)",
       "Bash(node:*)",
       "Bash(npx create-next-app:*)",
-      "Bash(npm run dev:*)"
+      "Bash(npm run dev:*)",
+      "Bash(find:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { ShippingEmail, EmailWithQuotes } from '@/types';
+import { ShippingEmail, EmailWithQuotes, PaginatedEmailsResponse } from '@/types';
 import EmailList from '@/components/EmailList';
 import EmailDetails from '@/components/EmailDetails';
 import { Mail, RefreshCw } from 'lucide-react';
+
+const DEFAULT_PAGE_SIZE = 20;
 
 export default function Home() {
   const [emails, setEmails] = useState<ShippingEmail[]>([]);
@@ -13,15 +15,27 @@ export default function Home() {
   const [isLoadingList, setIsLoadingList] = useState(true);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pagination, setPagination] = useState({
+    currentPage: 1,
+    totalPages: 1,
+    totalCount: 0,
+    limit: DEFAULT_PAGE_SIZE,
+  });
 
-  const fetchEmails = useCallback(async () => {
+  const fetchEmails = useCallback(async (page: number = 1) => {
     setIsLoadingList(true);
     setError(null);
     try {
-      const response = await fetch('/api/emails?limit=100');
+      const response = await fetch(`/api/emails?page=${page}&limit=${DEFAULT_PAGE_SIZE}`);
       if (!response.ok) throw new Error('Failed to fetch emails');
-      const data = await response.json();
+      const data: PaginatedEmailsResponse = await response.json();
       setEmails(data.emails);
+      setPagination({
+        currentPage: data.currentPage,
+        totalPages: data.totalPages,
+        totalCount: data.totalCount,
+        limit: data.limit,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load emails');
     } finally {
@@ -45,7 +59,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    fetchEmails();
+    fetchEmails(1);
   }, [fetchEmails]);
 
   useEffect(() => {
@@ -58,6 +72,12 @@ export default function Home() {
 
   const handleSelectEmail = (emailId: number) => {
     setSelectedEmailId(emailId);
+  };
+
+  const handlePageChange = (page: number) => {
+    setSelectedEmailId(null);
+    setSelectedEmail(null);
+    fetchEmails(page);
   };
 
   const handleFeedbackSubmit = async (
@@ -96,7 +116,7 @@ export default function Home() {
           <h1 className="text-lg font-semibold">Shipping Emails</h1>
         </div>
         <button
-          onClick={fetchEmails}
+          onClick={() => fetchEmails(pagination.currentPage)}
           disabled={isLoadingList}
           className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded hover:bg-white/20 transition-colors disabled:opacity-50"
         >
@@ -114,7 +134,7 @@ export default function Home() {
               <div className="text-center">
                 <p className="text-red-600 mb-2">{error}</p>
                 <button
-                  onClick={fetchEmails}
+                  onClick={() => fetchEmails(pagination.currentPage)}
                   className="text-sm text-outlook-blue hover:underline"
                 >
                   Try again
@@ -133,6 +153,8 @@ export default function Home() {
               emails={emails}
               selectedEmailId={selectedEmailId}
               onSelectEmail={handleSelectEmail}
+              pagination={pagination}
+              onPageChange={handlePageChange}
             />
           )}
         </div>
