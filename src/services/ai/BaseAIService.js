@@ -74,6 +74,7 @@ ${bodyContent}
    * @returns {string} AI prompt for data extraction
    */
   getExtractionPrompt(emailContent) {
+    const today = new Date().toISOString().split('T')[0]; // Get current date in YYYY-MM-DD format
     return `You are an expert data extraction assistant for Seahorse Express, a specialized shipping and 3PL logistics company focused on OVERWEIGHT and OVERSIZED cargo transport.
 
 CRITICAL CONTEXT - READ CAREFULLY:
@@ -388,7 +389,7 @@ DATES:
 - "requested_pickup_date": Client's desired pickup
 - "requested_delivery_date": Client's desired delivery
 - "acceptance_date": When client said yes
-- Handle relative dates: "next Monday" → calculate actual date based on email date
+- Handle relative dates: "next Monday" → calculate actual date based on email date. Today's date is ${today}.
 - Handle date ranges: "between June 5-10" → use earliest date
 
 EQUIPMENT TYPE MATCHING:
@@ -611,7 +612,7 @@ Return complete, accurate JSON following this structure exactly.`;
    * @param {Array} matches - Historical matches
    * @returns {string} AI prompt for pricing
    */
-  getPricingPrompt(sourceQuote, matches) {
+  getPricingPrompt(sourceQuote, matches, marketData = { fuelSurcharge: 0.3 }) {
     const topMatches = matches.slice(0, 5);
 
     return `You are a senior pricing analyst at a drayage and transportation company with 15+ years of experience. Your role is to provide accurate, competitive quotes that win business while maintaining profitability.
@@ -646,7 +647,9 @@ ${topMatches.map((m, i) => `
 
 ## PRICING FACTORS TO CONSIDER
 - Mileage-based rates ($2.50-4.50 per mile for FTL)
-- Fuel surcharge (currently ~25-35% of linehaul)
+- Fuel surcharge (currently ~${(marketData.fuelSurcharge * 100).toFixed(
+      0
+    )}% of linehaul)
 - Accessorials (liftgate, inside delivery, detention)
 - Lane density (headhaul vs backhaul)
 - Equipment type premiums (flatbed +15-25%)

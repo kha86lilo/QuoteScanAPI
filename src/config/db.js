@@ -19,8 +19,10 @@ const pool = new Pool({
     rejectUnauthorized: false,
   },
   max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  idleTimeoutMillis: 60000,        // Increased to 60 seconds for longer AI operations
+  connectionTimeoutMillis: 10000,  // Increased to 10 seconds for connection
+  keepAlive: true,                 // Enable TCP keepalive
+  keepAliveInitialDelayMillis: 10000, // Start keepalive after 10 seconds
 });
 
 // Test connection
@@ -29,8 +31,13 @@ pool.on('connect', () => {
 });
 
 pool.on('error', (err) => {
-  console.error('✗ Unexpected error on idle client', err);
-  process.exit(-1);
+  // Log the error but don't crash - the pool will handle reconnection
+  console.error('✗ Database pool error (will attempt reconnection):', err.message);
+  // Only exit on fatal errors that indicate configuration issues
+  if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+    console.error('Fatal database configuration error, shutting down...');
+    process.exit(-1);
+  }
 });
 
 /**
@@ -706,13 +713,14 @@ async function createQuoteMatch(matchData) {
       suggestedPrice,
       priceConfidence,
       algorithmVersion = 'v1',
+      aiPricingDetails = null,
     } = matchData;
 
     const result = await client.query(
       `INSERT INTO quote_matches (
         source_quote_id, matched_quote_id, similarity_score,
-        match_criteria, suggested_price, price_confidence, match_algorithm_version
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        match_criteria, suggested_price, price_confidence, match_algorithm_version, ai_pricing_details
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (source_quote_id, matched_quote_id)
       DO UPDATE SET
         similarity_score = EXCLUDED.similarity_score,
@@ -720,6 +728,7 @@ async function createQuoteMatch(matchData) {
         suggested_price = EXCLUDED.suggested_price,
         price_confidence = EXCLUDED.price_confidence,
         match_algorithm_version = EXCLUDED.match_algorithm_version,
+        ai_pricing_details = EXCLUDED.ai_pricing_details,
         created_at = NOW()
       RETURNING *`,
       [
@@ -730,6 +739,7 @@ async function createQuoteMatch(matchData) {
         suggestedPrice,
         priceConfidence,
         algorithmVersion,
+        aiPricingDetails ? JSON.stringify(aiPricingDetails) : null,
       ]
     );
 
@@ -754,8 +764,8 @@ async function createQuoteMatchesBulk(matches) {
       const result = await client.query(
         `INSERT INTO quote_matches (
           source_quote_id, matched_quote_id, similarity_score,
-          match_criteria, suggested_price, price_confidence, match_algorithm_version
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          match_criteria, suggested_price, price_confidence, match_algorithm_version, ai_pricing_details
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (source_quote_id, matched_quote_id)
         DO UPDATE SET
           similarity_score = EXCLUDED.similarity_score,
@@ -763,6 +773,7 @@ async function createQuoteMatchesBulk(matches) {
           suggested_price = EXCLUDED.suggested_price,
           price_confidence = EXCLUDED.price_confidence,
           match_algorithm_version = EXCLUDED.match_algorithm_version,
+          ai_pricing_details = EXCLUDED.ai_pricing_details,
           created_at = NOW()
         RETURNING *`,
         [
@@ -773,6 +784,7 @@ async function createQuoteMatchesBulk(matches) {
           match.suggestedPrice,
           match.priceConfidence,
           match.algorithmVersion || 'v1',
+          match.aiPricingDetails ? JSON.stringify(match.aiPricingDetails) : null,
         ]
       );
       results.push(result.rows[0]);

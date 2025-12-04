@@ -695,6 +695,14 @@ async function processEnhancedMatches(newQuoteIds, options = {}) {
             suggestedPrice: idx === 0 ? finalSuggestedPrice : m.suggestedPrice,
             priceConfidence: idx === 0 ? finalPriceConfidence : m.priceConfidence,
             algorithmVersion: useAI ? 'v2-ai-enhanced' : 'v2-enhanced',
+            aiPricingDetails: idx === 0 && aiPricing ? {
+              recommended_price: aiPricing.recommended_price,
+              floor_price: aiPricing.floor_price,
+              target_price: aiPricing.target_price,
+              ceiling_price: aiPricing.ceiling_price,
+              confidence: aiPricing.confidence,
+              reasoning: aiPricing.reasoning,
+            } : null,
           }));
 
           await db.createQuoteMatchesBulk(matchesToInsert);
