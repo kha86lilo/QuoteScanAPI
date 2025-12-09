@@ -3,7 +3,7 @@
  * Main entry point for the Shipping Quote Email Extractor API
  */
 
-import express from 'express';
+import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -25,11 +25,11 @@ handleUncaughtException();
 handleUnhandledRejection();
 
 // Initialize Express app
-const app = express();
-const PORT = process.env.PORT || 3000;
+const app: Express = express();
+const PORT: number = parseInt(process.env.PORT || '3000', 10);
 
 // CORS configuration
-const corsOptions = {
+const corsOptions: cors.CorsOptions = {
   origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : '*',
   credentials: true,
 };
@@ -45,7 +45,7 @@ app.use(morgan('combined'));
 app.use('/api', routes);
 
 // Root endpoint
-app.get('/', (req, res) => {
+app.get('/', (_req: Request, res: Response) => {
   res.json({
     ...API_INFO,
     endpoints: ENDPOINTS,
@@ -62,7 +62,7 @@ app.use(errorHandler);
 app.listen(PORT, () => logStartup(PORT));
 
 // Graceful shutdown
-const shutdown = (signal) => {
+const shutdown = (signal: string): void => {
   console.log(`\n${signal} received. Shutting down gracefully...`);
   process.exit(0);
 };

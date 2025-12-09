@@ -4,22 +4,42 @@
  */
 
 import axios from 'axios';
+import type { Email, Attachment } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Token cache stored outside the class to avoid extensibility issues
-let accessToken = null;
-let tokenExpiry = null;
+let accessToken: string | null = null;
+let tokenExpiry: number | null = null;
+
+interface TokenResponse {
+  access_token: string;
+  expires_in: number;
+}
+
+interface FetchEmailsOptions {
+  searchQuery?: string;
+  top?: number;
+  startDate?: string | null;
+}
+
+interface AdvancedSearchFilters {
+  from?: string;
+  hasAttachments?: boolean;
+  startDate?: string;
+  endDate?: string;
+  searchQuery?: string;
+  top?: number;
+}
+
+interface GraphApiResponse<T> {
+  value: T[];
+}
 
 class MicrosoftGraphService {
-  constructor() {}
-
   /**
    * Get Microsoft Graph API access token using client credentials flow
-   * @returns {Promise<string>} Access token
    */
-  async getAccessToken() {
-    // Return cached token if still valid
+  async getAccessToken(): Promise<string> {
     if (accessToken && tokenExpiry && Date.now() < tokenExpiry) {
       return accessToken;
     }
@@ -28,43 +48,38 @@ class MicrosoftGraphService {
 
     const params = new URLSearchParams({
       grant_type: 'client_credentials',
-      client_id: process.env.MS_CLIENT_ID,
-      client_secret: process.env.MS_CLIENT_SECRET,
+      client_id: process.env.MS_CLIENT_ID || '',
+      client_secret: process.env.MS_CLIENT_SECRET || '',
       scope: 'https://graph.microsoft.com/.default',
     });
 
     try {
-      const response = await axios.post(tokenUrl, params, {
+      const response = await axios.post<TokenResponse>(tokenUrl, params, {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
 
       accessToken = response.data.access_token;
-      // Set token expiry to 5 minutes before actual expiry
       tokenExpiry = Date.now() + (response.data.expires_in - 300) * 1000;
 
-      console.log('✓ Obtained Microsoft Graph API access token');
+      console.log('Success: Obtained Microsoft Graph API access token');
       return accessToken;
     } catch (error) {
-      console.error('✗ Failed to get access token:', error.response?.data || error.message);
+      const err = error as { response?: { data?: unknown }; message?: string };
+      console.error('Error: Failed to get access token:', err.response?.data || err.message);
       throw new Error('Failed to authenticate with Microsoft Graph API');
     }
   }
 
   /**
    * Fetch emails from Microsoft 365 using Graph API
-   * @param {Object} options - Search options
-   * @param {string} options.searchQuery - Keywords to search for
-   * @param {number} options.top - Number of emails to fetch (max 100)
-   * @param {string} options.startDate - Optional start date (YYYY-MM-DD)
-   * @returns {Promise<Array>} Array of email objects
    */
   async fetchEmails({
     searchQuery = 'quote OR shipping OR freight OR cargo',
     top = 100,
     startDate = null,
-  }) {
+  }: FetchEmailsOptions = {}): Promise<Email[]> {
     const token = await this.getAccessToken();
 
     const headers = {
@@ -74,7 +89,7 @@ class MicrosoftGraphService {
 
     const baseUrl = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages`;
 
-    const params = {
+    const params: Record<string, string | number> = {
       $top: top,
       $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
       '?$orderby': 'receivedDateTime',
@@ -84,33 +99,31 @@ class MicrosoftGraphService {
       params['$search'] = `"${searchQuery}"`;
     }
 
-    // Add date filter if provided
     if (startDate && !searchQuery) {
       params['$filter'] = `receivedDateTime ge ${startDate}`;
     }
 
     try {
-      const response = await axios.get(baseUrl, {
+      const response = await axios.get<GraphApiResponse<Email>>(baseUrl, {
         headers,
         params,
       });
 
       const emails = response.data.value || [];
-      console.log(`✓ Fetched ${emails.length} emails from Microsoft 365`);
+      console.log(`Success: Fetched ${emails.length} emails from Microsoft 365`);
 
       return emails;
     } catch (error) {
-      console.error('✗ Failed to fetch emails:', error.response?.data || error.message);
+      const err = error as { response?: { data?: unknown }; message?: string };
+      console.error('Error: Failed to fetch emails:', err.response?.data || err.message);
       throw new Error('Failed to fetch emails from Microsoft Graph API');
     }
   }
 
   /**
    * Fetch attachments for a specific email
-   * @param {string} messageId - Email message ID
-   * @returns {Promise<Array>} Array of attachment objects
    */
-  async fetchAttachments(messageId) {
+  async fetchAttachments(messageId: string): Promise<Attachment[]> {
     const token = await this.getAccessToken();
 
     const headers = {
@@ -120,21 +133,19 @@ class MicrosoftGraphService {
     const url = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages/${messageId}/attachments`;
 
     try {
-      const response = await axios.get(url, { headers });
+      const response = await axios.get<GraphApiResponse<Attachment>>(url, { headers });
       return response.data.value || [];
     } catch (error) {
-      console.error(`✗ Failed to fetch attachments for message ${messageId}:`, error.message);
+      const err = error as Error;
+      console.error(`Error: Failed to fetch attachments for message ${messageId}:`, err.message);
       return [];
     }
   }
 
   /**
    * Download attachment content
-   * @param {string} messageId - Email message ID
-   * @param {string} attachmentId - Attachment ID
-   * @returns {Promise<Object>} Attachment data
    */
-  async downloadAttachment(messageId, attachmentId) {
+  async downloadAttachment(messageId: string, attachmentId: string): Promise<Attachment> {
     const token = await this.getAccessToken();
 
     const headers = {
@@ -144,20 +155,19 @@ class MicrosoftGraphService {
     const url = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages/${messageId}/attachments/${attachmentId}`;
 
     try {
-      const response = await axios.get(url, { headers });
+      const response = await axios.get<Attachment>(url, { headers });
       return response.data;
     } catch (error) {
-      console.error(`✗ Failed to download attachment:`, error.message);
+      const err = error as Error;
+      console.error(`Error: Failed to download attachment:`, err.message);
       throw error;
     }
   }
 
   /**
    * Search emails with advanced filters
-   * @param {Object} filters - Advanced search filters
-   * @returns {Promise<Array>} Array of email objects
    */
-  async advancedSearch(filters) {
+  async advancedSearch(filters: AdvancedSearchFilters): Promise<Email[]> {
     const token = await this.getAccessToken();
 
     const headers = {
@@ -167,7 +177,7 @@ class MicrosoftGraphService {
 
     const baseUrl = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages`;
 
-    let filterQuery = [];
+    const filterQuery: string[] = [];
 
     if (filters.from) {
       filterQuery.push(`from/emailAddress/address eq '${filters.from}'`);
@@ -185,7 +195,7 @@ class MicrosoftGraphService {
       filterQuery.push(`receivedDateTime le ${filters.endDate}T23:59:59Z`);
     }
 
-    const params = {
+    const params: Record<string, string | number> = {
       $top: filters.top || 100,
       $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
       $orderby: 'receivedDateTime',
@@ -200,10 +210,11 @@ class MicrosoftGraphService {
     }
 
     try {
-      const response = await axios.get(baseUrl, { headers, params });
+      const response = await axios.get<GraphApiResponse<Email>>(baseUrl, { headers, params });
       return response.data.value || [];
     } catch (error) {
-      console.error('✗ Advanced search failed:', error.response?.data || error.message);
+      const err = error as { response?: { data?: unknown }; message?: string };
+      console.error('Error: Advanced search failed:', err.response?.data || err.message);
       throw error;
     }
   }
@@ -211,4 +222,6 @@ class MicrosoftGraphService {
 
 const microsoftGraphService = new MicrosoftGraphService();
 export default microsoftGraphService;
-export const { getAccessToken, fetchEmails, advancedEmailSearch } = microsoftGraphService;
+export const getAccessToken = microsoftGraphService.getAccessToken.bind(microsoftGraphService);
+export const fetchEmails = microsoftGraphService.fetchEmails.bind(microsoftGraphService);
+export const advancedEmailSearch = microsoftGraphService.advancedSearch.bind(microsoftGraphService);

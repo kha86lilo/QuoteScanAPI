@@ -3,11 +3,11 @@
  * Handles all email-related endpoints
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import * as emailController from '../controllers/email.controller.js';
 import { emailProcessingLimiter, generalApiLimiter } from '../middleware/rateLimiter.js';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 /**
  * Process emails with rate limiting

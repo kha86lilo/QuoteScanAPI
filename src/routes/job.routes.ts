@@ -3,11 +3,11 @@
  * Handles all job status and result endpoints
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import * as jobController from '../controllers/job.controller.js';
 import { statusCheckLimiter } from '../middleware/rateLimiter.js';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 /**
  * Get job statistics

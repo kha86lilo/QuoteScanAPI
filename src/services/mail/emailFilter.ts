@@ -3,194 +3,94 @@
  * Pre-filters emails to identify likely quote requests before expensive API processing
  */
 
-import { checkEmailExists, isSpammer, } from '../../config/db.js';
+import { checkEmailExists, isSpammer } from '../../config/db.js';
 import { processEmailAttachments } from '../attachmentProcessor.js';
+import type { Email, FilterPreview, FilteredEmailPreview, FilterSummary, AttachmentMeta } from '../../types/index.js';
+
+interface FilterResult {
+  score: number;
+  reason: string;
+}
+
+interface SpamCheckResult {
+  isSpam: boolean;
+  reason: string;
+  score?: number;
+}
+
+interface ExclusionCheckResult {
+  isExcluded: boolean;
+  reason: string;
+}
+
+interface ShouldProcessResult {
+  shouldProcess: boolean;
+  score: number;
+  reason: string;
+}
+
+interface EmailWithScore extends Email {
+  filterScore: number;
+  filterReason: string;
+}
+
+interface FilterEmailsResult {
+  toProcess: EmailWithScore[];
+  toSkip: EmailWithScore[];
+  summary: FilterSummary;
+}
+
+interface FilterOptions {
+  processAttachments?: boolean;
+}
 
 class EmailFilter {
-  // Keywords that strongly indicate a quote email
   static STRONG_QUOTE_KEYWORDS = [
-    'quote',
-    'quotation',
-    'rfq',
-    'request for quote',
-    'price',
-    'pricing',
-    'rate',
-    'rates',
-    'cost',
-    'costs',
-    'shipment',
-    'shipping',
-    'freight',
-    'cargo',
-    'estimate',
-    'proposal',
-    'bid',
-    'tariff',
-    // Load types
-    'ltl',
-    'ftl',
-    'fcl',
-    'lcl',
-    'partial load',
-    'full truckload',
-    // Services
-    'drayage',
-    'transload',
-    'cross dock',
-    'intermodal',
-    // Overweight/Oversized specific
-    'overweight',
-    'oversized',
-    'oversize',
-    'over dimensional',
-    'overdimensional',
-    'heavy haul',
-    'permit load',
-    'wide load',
-    'superload',
-    // Equipment types
-    'flatbed',
-    'step deck',
-    'stepdeck',
-    'rgn',
-    'lowboy',
-    'double drop',
-    'conestoga',
-    'hotshot',
-    'power only',
+    'quote', 'quotation', 'rfq', 'request for quote', 'price', 'pricing',
+    'rate', 'rates', 'cost', 'costs', 'shipment', 'shipping', 'freight',
+    'cargo', 'estimate', 'proposal', 'bid', 'tariff',
+    'ltl', 'ftl', 'fcl', 'lcl', 'partial load', 'full truckload',
+    'drayage', 'transload', 'cross dock', 'intermodal',
+    'overweight', 'oversized', 'oversize', 'over dimensional', 'overdimensional',
+    'heavy haul', 'permit load', 'wide load', 'superload',
+    'flatbed', 'step deck', 'stepdeck', 'rgn', 'lowboy', 'double drop',
+    'conestoga', 'hotshot', 'power only',
   ];
 
-  // Keywords that moderately indicate a quote
   static MODERATE_KEYWORDS = [
-    'delivery',
-    'pickup',
-    'transport',
-    'logistics',
-    'pallet',
-    'pallets',
-    'skid',
-    'skids',
-    'crate',
-    'container',
-    'containers',
-    'origin',
-    'destination',
-    'weight',
-    'dimensions',
-    'length',
-    'width',
-    'height',
-    'lbs',
-    'pounds',
-    'kg',
-    'kilograms',
-    'tonnes',
-    'tons',
-    'feet',
-    'meters',
-    // Urgency
-    'urgent',
-    'asap',
-    'rush',
-    'expedite',
-    'expedited',
-    'time sensitive',
-    'critical',
-    // Special requirements
-    'hazmat',
-    'hazardous',
-    'temperature controlled',
-    'refrigerated',
-    'reefer',
-    'customs',
-    'import',
-    'export',
-    'clearance',
-    'warehousing',
-    'storage',
-    'distribution',
-    // Equipment and loading
-    'machinery',
-    'equipment',
-    'construction',
-    'industrial',
-    'crane',
-    'forklift',
-    'loading dock',
-    'liftgate',
-    'tarping',
-    'tarp',
-    'securement',
-    'straps',
-    'chains',
-    // Permits and escorts
-    'permit',
-    'permits',
-    'pilot car',
-    'escort',
-    'route survey',
-    // Cargo types
-    'steel',
-    'lumber',
-    'pipe',
-    'coil',
-    'rebar',
-    'beam',
-    'truss',
-    'generator',
-    'transformer',
-    'excavator',
-    'bulldozer',
-    'crane',
-    'boat',
-    'yacht',
-    // Terms
-    'incoterms',
-    'fob',
-    'cif',
-    'ddp',
-    'exw',
-    'bol',
-    'bill of lading',
+    'delivery', 'pickup', 'transport', 'logistics', 'pallet', 'pallets',
+    'skid', 'skids', 'crate', 'container', 'containers', 'origin', 'destination',
+    'weight', 'dimensions', 'length', 'width', 'height', 'lbs', 'pounds',
+    'kg', 'kilograms', 'tonnes', 'tons', 'feet', 'meters',
+    'urgent', 'asap', 'rush', 'expedite', 'expedited', 'time sensitive', 'critical',
+    'hazmat', 'hazardous', 'temperature controlled', 'refrigerated', 'reefer',
+    'customs', 'import', 'export', 'clearance', 'warehousing', 'storage', 'distribution',
+    'machinery', 'equipment', 'construction', 'industrial', 'crane', 'forklift',
+    'loading dock', 'liftgate', 'tarping', 'tarp', 'securement', 'straps', 'chains',
+    'permit', 'permits', 'pilot car', 'escort', 'route survey',
+    'steel', 'lumber', 'pipe', 'coil', 'rebar', 'beam', 'truss',
+    'generator', 'transformer', 'excavator', 'bulldozer', 'boat', 'yacht',
+    'incoterms', 'fob', 'cif', 'ddp', 'exw', 'bol', 'bill of lading',
   ];
 
-  // Keywords that indicate it's NOT a quote (internal/spam)
   static EXCLUDE_KEYWORDS = [
-    'unsubscribe',
-    'newsletter',
-    'notification',
-    'password reset',
-    'verify your email',
-    'confirm your',
-    'update your',
-    'invoice',
-    'receipt',
-    'payment received',
-    're: re:',
-    'fwd: fwd:',
-    'out of office',
-    'automatic reply',
-    'delivery confirmation',
-    'shipment delivered',
-    'pod', // Proof of delivery
-    'tracking update',
-    'in transit',
-    'departed facility', // Tracking notifications
+    'unsubscribe', 'newsletter', 'notification', 'password reset',
+    'verify your email', 'confirm your', 'update your', 'invoice',
+    'receipt', 'payment received', 're: re:', 'fwd: fwd:', 'out of office',
+    'automatic reply', 'delivery confirmation', 'shipment delivered', 'pod',
+    'tracking update', 'in transit', 'departed facility',
   ];
 
   /**
-   * Check if an email is from a spammer (async database check)
-   * @param {Object} email - Email object from Microsoft Graph
-   * @returns {Promise<{isSpam: boolean, reason: string}>}
+   * Check if an email is from a spammer
    */
-  static async checkSpammer(email) {
+  static async checkSpammer(email: Email): Promise<SpamCheckResult> {
     const subject = (email.subject || '').toLowerCase();
     const bodyPreview = (email.bodyPreview || '').toLowerCase();
     const content = `${subject} ${bodyPreview}`;
     for (const keyword of EmailFilter.EXCLUDE_KEYWORDS) {
       if (content.includes(keyword)) {
-        return { score: 0, reason: `Excluded: Contains '${keyword}'` };
+        return { isSpam: true, reason: `Excluded: Contains '${keyword}'`, score: 0 };
       }
     }
 
@@ -205,35 +105,24 @@ class EmailFilter {
     return { isSpam: false, reason: '' };
   }
 
-  static async isToBeExcluded(email) {
+  static async isToBeExcluded(email: Email): Promise<ExclusionCheckResult> {
     const subject = (email.subject || '').toLowerCase();
     const bodyPreview = (email.bodyPreview || '').toLowerCase();
     const senderEmail = (email.from?.emailAddress?.address || '').toLowerCase();
     const senderName = (email.from?.emailAddress?.name || '').toLowerCase();
 
-    // Extract sender domain
     const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';
-
-    // Combine subject and preview for analysis
     const content = `${subject} ${bodyPreview}`;
 
-    // 0. CRITICAL: Exclude internal Seahorse emails (outgoing quotes, not incoming requests)
     if (senderDomain === 'seahorseexpress.com' || senderEmail.includes('seahorseexpress.com')) {
       return { isExcluded: true, reason: 'Internal Seahorse email - outgoing quote (excluded)' };
     }
 
-    // Exclude known Seahorse staff by name (in case emails come from personal addresses)
-    const seahorseStaff = [
-      'danny nasser',
-      'tina merkab',
-      'seahorse express',
-      // Add other staff names here
-    ];
+    const seahorseStaff = ['danny nasser', 'tina merkab', 'seahorse express'];
     if (seahorseStaff.some((name) => senderName.includes(name))) {
       return { isExcluded: true, reason: `Known Seahorse staff: ${senderName} (excluded)` };
     }
 
-    // 1. Check for exclusion keywords (immediate reject)
     for (const keyword of EmailFilter.EXCLUDE_KEYWORDS) {
       if (content.includes(keyword)) {
         return { isExcluded: true, reason: `Excluded: Contains '${keyword}'` };
@@ -244,48 +133,34 @@ class EmailFilter {
 
   /**
    * Calculate a score (0-100) indicating likelihood this is a quote email
-   * @param {Object} email - Email object from Microsoft Graph
-   * @returns {Object} { score, reason }
    */
-  static calculateQuoteScore(email) {
+  static calculateQuoteScore(email: Email): FilterResult {
     let score = 0;
-    const reasons = [];
+    const reasons: string[] = [];
 
     const subject = (email.subject || '').toLowerCase();
     const bodyPreview = (email.bodyPreview || '').toLowerCase();
     const senderEmail = (email.from?.emailAddress?.address || '').toLowerCase();
     const senderName = (email.from?.emailAddress?.name || '').toLowerCase();
 
-    // Extract sender domain
     const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';
-
-    // Combine subject and preview for analysis
     const content = `${subject} ${bodyPreview}`;
 
-    // 0. CRITICAL: Exclude internal Seahorse emails (outgoing quotes, not incoming requests)
     if (senderDomain === 'seahorseexpress.com' || senderEmail.includes('seahorseexpress.com')) {
       return { score: 0, reason: 'Internal Seahorse email - outgoing quote (excluded)' };
     }
 
-    // Exclude known Seahorse staff by name (in case emails come from personal addresses)
-    const seahorseStaff = [
-      'danny nasser',
-      'tina merkab',
-      'seahorse express',
-      // Add other staff names here
-    ];
+    const seahorseStaff = ['danny nasser', 'tina merkab', 'seahorse express'];
     if (seahorseStaff.some((name) => senderName.includes(name))) {
       return { score: 0, reason: `Known Seahorse staff: ${senderName} (excluded)` };
     }
 
-    // 1. Check for exclusion keywords (immediate reject)
     for (const keyword of EmailFilter.EXCLUDE_KEYWORDS) {
       if (content.includes(keyword)) {
         return { score: 0, reason: `Excluded: Contains '${keyword}'` };
       }
     }
 
-    // 2. Check for strong quote keywords in subject (high value)
     const strongInSubject = EmailFilter.STRONG_QUOTE_KEYWORDS.filter((kw) =>
       subject.includes(kw)
     ).length;
@@ -294,7 +169,6 @@ class EmailFilter {
       reasons.push(`${strongInSubject} strong keyword(s) in subject`);
     }
 
-    // 3. Check for strong keywords in body
     const strongInBody = EmailFilter.STRONG_QUOTE_KEYWORDS.filter((kw) =>
       bodyPreview.includes(kw)
     ).length;
@@ -303,14 +177,12 @@ class EmailFilter {
       reasons.push(`${strongInBody} strong keyword(s) in body`);
     }
 
-    // 4. Check for moderate keywords
     const moderateCount = EmailFilter.MODERATE_KEYWORDS.filter((kw) => content.includes(kw)).length;
     if (moderateCount > 0) {
-      score += Math.min(moderateCount * 5, 20); // Max 20 points
+      score += Math.min(moderateCount * 5, 20);
       reasons.push(`${moderateCount} moderate keyword(s)`);
     }
 
-    // 5. Check for numbers (prices, weights, dimensions)
     const hasDollar = content.includes('$') || content.includes('usd');
     const hasWeight = /\d+\s*(kg|lb|lbs|ton|tonnes)/i.test(content);
     const hasDimensions = /\d+\s*x\s*\d+\s*x\s*\d+/i.test(content);
@@ -328,7 +200,6 @@ class EmailFilter {
       reasons.push('Contains dimensions');
     }
 
-    // 6. Check for automated senders (already excluded internal Seahorse above)
     if (
       senderEmail.startsWith('noreply@') ||
       senderEmail.startsWith('no-reply@') ||
@@ -338,24 +209,20 @@ class EmailFilter {
       reasons.push('Automated sender');
     }
 
-    // 7. Check for question marks (requests typically have questions)
     const questionCount = (content.match(/\?/g) || []).length;
     if (questionCount > 0) {
       score += Math.min(questionCount * 3, 10);
       reasons.push(`${questionCount} question(s)`);
     }
 
-    // 8. Check for email having attachments (quotes often have PDFs)
     if (email.hasAttachments) {
       score += 5;
       reasons.push('Has attachments');
     }
 
-    // 8b. Check attachment content if provided
     if (email.attachmentText) {
       const attachmentContent = email.attachmentText.toLowerCase();
 
-      // Check for strong keywords in attachment
       const strongInAttachment = EmailFilter.STRONG_QUOTE_KEYWORDS.filter((kw) =>
         attachmentContent.includes(kw)
       ).length;
@@ -364,7 +231,6 @@ class EmailFilter {
         reasons.push(`${strongInAttachment} strong keyword(s) in attachments`);
       }
 
-      // Check for moderate keywords in attachment
       const moderateInAttachment = EmailFilter.MODERATE_KEYWORDS.filter((kw) =>
         attachmentContent.includes(kw)
       ).length;
@@ -373,7 +239,6 @@ class EmailFilter {
         reasons.push(`${moderateInAttachment} moderate keyword(s) in attachments`);
       }
 
-      // Check for numbers in attachments (prices, weights, dimensions)
       const attachmentHasDollar =
         attachmentContent.includes('$') || attachmentContent.includes('usd');
       const attachmentHasWeight = /\d+\s*(kg|lb|lbs|ton|tonnes)/i.test(attachmentContent);
@@ -393,13 +258,11 @@ class EmailFilter {
       }
     }
 
-    // 9. Warn about very long emails (might be email chains)
-    if (email.bodyPreview.length > 5000) {
+    if ((email.bodyPreview || '').length > 5000) {
       score -= 10;
       reasons.push('Very long email (likely chain)');
     }
 
-    // Cap score at 100
     score = Math.min(score, 100);
 
     const reasonText = reasons.length > 0 ? reasons.join('; ') : 'No indicators';
@@ -409,11 +272,8 @@ class EmailFilter {
 
   /**
    * Determine if email should be processed with Claude API
-   * @param {Object} email - Email object
-   * @param {number} threshold - Minimum score to process (default 30)
-   * @returns {Promise<Object>} { shouldProcess, score, reason }
    */
-  static async shouldProcess(email, threshold = 30) {
+  static async shouldProcess(email: Email, threshold = 30): Promise<ShouldProcessResult> {
     const { score, reason } = this.calculateQuoteScore(email);
     return {
       shouldProcess: score >= threshold,
@@ -424,23 +284,22 @@ class EmailFilter {
 
   /**
    * Filter array of emails and separate into process/skip groups
-   * @param {Array} emails - Array of email objects
-   * @param {number} threshold - Score threshold
-   * @param {Object} options - Additional options
-   * @param {boolean} options.processAttachments - Whether to process attachments for scoring (default: true)
-   * @returns {Promise<Object>} { toProcess, toSkip, summary }
    */
-  static async filterEmails(emails, threshold = 30, options = {}) {
+  static async filterEmails(
+    emails: Email[],
+    threshold = 30,
+    options: FilterOptions = {}
+  ): Promise<FilterEmailsResult> {
     const { processAttachments = true } = options;
-    const toProcess = [];
-    const toSkip = [];
+    const toProcess: EmailWithScore[] = [];
+    const toSkip: EmailWithScore[] = [];
 
     for (const email of emails) {
       const spamCheck = await this.checkSpammer(email);
 
       let emailWithAttachmentText = email;
       if (spamCheck.isSpam) {
-        const emailWithScore = {
+        const emailWithScore: EmailWithScore = {
           ...emailWithAttachmentText,
           filterScore: 0,
           filterReason: spamCheck.reason,
@@ -448,10 +307,10 @@ class EmailFilter {
         toSkip.push(emailWithScore);
         continue;
       }
-      
+
       const exclusionCheck = await this.isToBeExcluded(email);
       if (exclusionCheck.isExcluded) {
-        const emailWithScore = {
+        const emailWithScore: EmailWithScore = {
           ...emailWithAttachmentText,
           filterScore: 0,
           filterReason: exclusionCheck.reason,
@@ -460,11 +319,10 @@ class EmailFilter {
         continue;
       }
 
-      // Check if already processed
-      const exists = await  checkEmailExists(email.id);
+      const exists = await checkEmailExists(email.id);
       if (exists) {
-        console.log(`  ⊘ Already processed, skipping`);
-        const emailWithScore = {
+        console.log(`  Already processed, skipping`);
+        const emailWithScore: EmailWithScore = {
           ...emailWithAttachmentText,
           filterScore: 0,
           filterReason: 'Already processed',
@@ -472,11 +330,11 @@ class EmailFilter {
         toSkip.push(emailWithScore);
         continue;
       }
-      // Process attachments if the email has them and option is enabled
+
       if (processAttachments && email.hasAttachments) {
         try {
           console.log(
-            `  📎 Fetching attachments for: ${(email.subject || 'No Subject').substring(0, 40)}...`
+            `  Fetching attachments for: ${(email.subject || 'No Subject').substring(0, 40)}...`
           );
           const attachmentResults = await processEmailAttachments(email.id);
           if (attachmentResults.extractedText) {
@@ -486,13 +344,14 @@ class EmailFilter {
             };
           }
         } catch (error) {
-          console.error(`  ⚠ Error processing attachments: ${error.message}`);
+          const err = error as Error;
+          console.error(`  Warning: Error processing attachments: ${err.message}`);
         }
       }
 
       const result = await this.shouldProcess(emailWithAttachmentText, threshold);
 
-      const emailWithScore = {
+      const emailWithScore: EmailWithScore = {
         ...emailWithAttachmentText,
         filterScore: result.score,
         filterReason: result.reason,
@@ -505,9 +364,9 @@ class EmailFilter {
       }
     }
 
-    const requestPrice = parseFloat(process.env.REQUEST_PRICE) || 0.015;
+    const requestPrice = parseFloat(process.env.REQUEST_PRICE || '') || 0.015;
 
-    const summary = {
+    const summary: FilterSummary = {
       total: emails.length,
       toProcess: toProcess.length,
       toSkip: toSkip.length,
@@ -522,19 +381,18 @@ class EmailFilter {
 
   /**
    * Generate preview report of filtered emails
-   * @param {Array} emails - Array of email objects
-   * @param {number} threshold - Score threshold
-   * @param {Object} options - Additional options
-   * @param {boolean} options.processAttachments - Whether to process attachments for scoring (default: true)
-   * @returns {Promise<Object>} Detailed preview data
    */
-  static async generatePreview(emails, threshold = 30, options = {}) {
+  static async generatePreview(
+    emails: Email[],
+    threshold = 30,
+    options: FilterOptions = {}
+  ): Promise<FilterPreview> {
     const { toProcess, toSkip, summary } = await this.filterEmails(emails, threshold, options);
 
-    const preview = {
+    const preview: FilterPreview = {
       threshold,
       summary,
-      toProcess: toProcess.map((email) => ({
+      toProcess: toProcess.map((email): FilteredEmailPreview => ({
         id: email.id,
         subject: email.subject,
         from: email.from?.emailAddress?.name,
@@ -544,7 +402,7 @@ class EmailFilter {
         hasAttachments: email.hasAttachments,
         attachmentMeta: email.attachmentMeta || null,
       })),
-      toSkip: toSkip.map((email) => ({
+      toSkip: toSkip.map((email): FilteredEmailPreview => ({
         id: email.id,
         subject: email.subject,
         from: email.from?.emailAddress?.name,
@@ -561,12 +419,9 @@ class EmailFilter {
 }
 
 export default EmailFilter;
-export const {
-  calculateQuoteScore,
-  checkSpammer,
-  isToBeExcluded,
-  filterEmails,
-  getFilterPreview,
-  generatePreview,
-  shouldProcess,
-} = EmailFilter;
+export const calculateQuoteScore = EmailFilter.calculateQuoteScore.bind(EmailFilter);
+export const checkSpammer = EmailFilter.checkSpammer.bind(EmailFilter);
+export const isToBeExcluded = EmailFilter.isToBeExcluded.bind(EmailFilter);
+export const filterEmails = EmailFilter.filterEmails.bind(EmailFilter);
+export const generatePreview = EmailFilter.generatePreview.bind(EmailFilter);
+export const shouldProcess = EmailFilter.shouldProcess.bind(EmailFilter);

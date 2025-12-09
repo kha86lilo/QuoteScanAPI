@@ -3,10 +3,10 @@
  * Handles all quote-related endpoints
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import * as quoteController from '../controllers/quote.controller.js';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 /**
  * Get all quotes from database

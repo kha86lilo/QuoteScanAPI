@@ -3,11 +3,20 @@
  * Centralized error handling for the API
  */
 
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
+
 /**
  * Custom error class for application errors
  */
 export class AppError extends Error {
-  constructor(message, statusCode = 500, isOperational = true) {
+  statusCode: number;
+  isOperational: boolean;
+  status: string;
+  service?: string;
+  operation?: string;
+  originalError?: string;
+
+  constructor(message: string, statusCode = 500, isOperational = true) {
     super(message);
     this.statusCode = statusCode;
     this.isOperational = isOperational;
@@ -21,14 +30,14 @@ export class AppError extends Error {
  * Custom error classes for specific error types
  */
 export class ValidationError extends AppError {
-  constructor(message) {
+  constructor(message: string) {
     super(message, 400);
     this.name = 'ValidationError';
   }
 }
 
 export class NotFoundError extends AppError {
-  constructor(resource) {
+  constructor(resource: string) {
     super(`${resource} not found`, 404);
     this.name = 'NotFoundError';
   }
@@ -49,7 +58,7 @@ export class ForbiddenError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message) {
+  constructor(message: string) {
     super(message, 409);
     this.name = 'ConflictError';
   }
@@ -63,55 +72,68 @@ export class RateLimitError extends AppError {
 }
 
 export class ExternalServiceError extends AppError {
-  constructor(service, originalError) {
+  constructor(service: string, originalError?: Error | string) {
     super(`External service error: ${service}`, 502);
     this.name = 'ExternalServiceError';
     this.service = service;
-    this.originalError = originalError?.message || originalError;
+    this.originalError =
+      originalError instanceof Error ? originalError.message : originalError;
   }
 }
 
 export class DatabaseError extends AppError {
-  constructor(operation, originalError) {
+  constructor(operation: string, originalError?: Error | string) {
     super(`Database error during ${operation}`, 500);
     this.name = 'DatabaseError';
     this.operation = operation;
-    this.originalError = originalError?.message || originalError;
+    this.originalError =
+      originalError instanceof Error ? originalError.message : originalError;
   }
 }
 
+type AsyncFunction = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
+
 /**
  * Async handler wrapper to catch errors in async route handlers
- * @param {Function} fn - Async function to wrap
- * @returns {Function} Express middleware function
  */
-export const asyncHandler = (fn) => {
-  return (req, res, next) => {
+export const asyncHandler = (fn: AsyncFunction): RequestHandler => {
+  return (req: Request, res: Response, next: NextFunction): void => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 };
 
+interface ErrorResponse {
+  success: boolean;
+  status: string;
+  message: string;
+  error?: string;
+  stack?: string;
+  originalError?: string;
+  service?: string;
+  operation?: string;
+  request?: {
+    method: string;
+    url: string;
+    ip?: string;
+  };
+}
+
 /**
  * Error response formatter
- * @param {Error} err - Error object
- * @param {Object} req - Express request object
- * @returns {Object} Formatted error response
  */
-const formatErrorResponse = (err, req) => {
+const formatErrorResponse = (err: AppError, req: Request): ErrorResponse => {
   const isProduction = process.env.NODE_ENV === 'production';
 
-  const response = {
+  const response: ErrorResponse = {
     success: false,
     status: err.status || 'error',
     message: err.message || 'Internal server error',
   };
 
-  // Add error name for operational errors
   if (err.isOperational) {
     response.error = err.name || 'Error';
   }
 
-  // Add additional details in development
   if (!isProduction) {
     response.stack = err.stack;
 
@@ -128,7 +150,6 @@ const formatErrorResponse = (err, req) => {
     }
   }
 
-  // Add request info for debugging in development
   if (!isProduction && err.statusCode >= 500) {
     response.request = {
       method: req.method,
@@ -142,17 +163,14 @@ const formatErrorResponse = (err, req) => {
 
 /**
  * Log error for monitoring and debugging
- * @param {Error} err - Error object
- * @param {Object} req - Express request object
  */
-const logError = (err, req) => {
+const logError = (err: AppError, req: Request): void => {
   const timestamp = new Date().toISOString();
 
   console.error('\n' + '='.repeat(80));
   console.error(`[${timestamp}] ERROR OCCURRED`);
   console.error('='.repeat(80));
 
-  // Log request details
   console.error('Request:', {
     method: req.method,
     url: req.originalUrl,
@@ -160,7 +178,6 @@ const logError = (err, req) => {
     userAgent: req.get('user-agent'),
   });
 
-  // Log error details
   console.error('Error:', {
     name: err.name,
     message: err.message,
@@ -168,12 +185,10 @@ const logError = (err, req) => {
     isOperational: err.isOperational,
   });
 
-  // Log stack trace for non-operational errors or in development
   if (!err.isOperational || process.env.NODE_ENV !== 'production') {
     console.error('Stack:', err.stack);
   }
 
-  // Log original error if exists
   if (err.originalError) {
     console.error('Original Error:', err.originalError);
   }
@@ -181,31 +196,41 @@ const logError = (err, req) => {
   console.error('='.repeat(80) + '\n');
 };
 
+interface PostgresError extends Error {
+  code?: string;
+  detail?: string;
+}
+
+interface AxiosError extends Error {
+  response?: {
+    data?: unknown;
+  };
+  config?: {
+    baseURL?: string;
+  };
+}
+
 /**
  * Handle specific error types
- * @param {Error} err - Error object
- * @returns {AppError} Transformed error
  */
-const handleSpecificErrors = (err) => {
-  // PostgreSQL errors
-  if (err.code?.startsWith('23')) {
-    if (err.code === '23505') {
-      return new ConflictError('Duplicate entry: ' + err.detail);
+const handleSpecificErrors = (err: Error | AppError): AppError => {
+  const pgErr = err as PostgresError;
+  if (pgErr.code?.startsWith('23')) {
+    if (pgErr.code === '23505') {
+      return new ConflictError('Duplicate entry: ' + pgErr.detail);
     }
-    if (err.code === '23503') {
+    if (pgErr.code === '23503') {
       return new ValidationError('Foreign key constraint violation');
     }
-    if (err.code === '23502') {
+    if (pgErr.code === '23502') {
       return new ValidationError('Required field is missing');
     }
   }
 
-  // Validation errors
   if (err.name === 'ValidationError' && !(err instanceof AppError)) {
     return new ValidationError(err.message);
   }
 
-  // JWT errors
   if (err.name === 'JsonWebTokenError') {
     return new UnauthorizedError('Invalid token');
   }
@@ -213,34 +238,41 @@ const handleSpecificErrors = (err) => {
     return new UnauthorizedError('Token expired');
   }
 
-  // Axios/HTTP errors
-  if (err.response) {
-    const service = err.config?.baseURL || 'External API';
-    return new ExternalServiceError(service, err.response.data || err.message);
+  const axiosErr = err as AxiosError;
+  if (axiosErr.response) {
+    const service = axiosErr.config?.baseURL || 'External API';
+    return new ExternalServiceError(
+      service,
+      (axiosErr.response.data as string) || axiosErr.message
+    );
   }
 
-  return err;
+  if (err instanceof AppError) {
+    return err;
+  }
+
+  return new AppError(err.message || 'Internal server error', 500, false);
 };
 
 /**
  * Global error handling middleware
- * This should be the last middleware in the chain
  */
-export const errorHandler = (err, req, res, next) => {
-  // Transform specific error types
-  let error = handleSpecificErrors(err);
+export const errorHandler = (
+  err: Error,
+  req: Request,
+  res: Response,
+  _next: NextFunction
+): void => {
+  let error: AppError = handleSpecificErrors(err);
 
-  // Convert unknown errors to AppError
   if (!(error instanceof AppError)) {
-    const statusCode = error.statusCode || 500;
-    const message = error.message || 'Internal server error';
+    const statusCode = (error as AppError).statusCode || 500;
+    const message = (error as Error).message || 'Internal server error';
     error = new AppError(message, statusCode, false);
   }
 
-  // Log error
   logError(error, req);
 
-  // Send error response
   const response = formatErrorResponse(error, req);
   res.status(error.statusCode || 500).json(response);
 };
@@ -248,7 +280,7 @@ export const errorHandler = (err, req, res, next) => {
 /**
  * Handle 404 - Not Found
  */
-export const notFoundHandler = (req, res, next) => {
+export const notFoundHandler = (req: Request, _res: Response, next: NextFunction): void => {
   const error = new NotFoundError(`Route ${req.originalUrl}`);
   next(error);
 };
@@ -256,9 +288,9 @@ export const notFoundHandler = (req, res, next) => {
 /**
  * Handle uncaught exceptions
  */
-export const handleUncaughtException = () => {
-  process.on('uncaughtException', (err) => {
-    console.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
+export const handleUncaughtException = (): void => {
+  process.on('uncaughtException', (err: Error) => {
+    console.error('UNCAUGHT EXCEPTION! Shutting down...');
     console.error('Error:', err.name, err.message);
     console.error('Stack:', err.stack);
     process.exit(1);
@@ -268,9 +300,9 @@ export const handleUncaughtException = () => {
 /**
  * Handle unhandled promise rejections
  */
-export const handleUnhandledRejection = () => {
-  process.on('unhandledRejection', (reason, promise) => {
-    console.error('UNHANDLED REJECTION! 💥 Shutting down...');
+export const handleUnhandledRejection = (): void => {
+  process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+    console.error('UNHANDLED REJECTION! Shutting down...');
     console.error('Reason:', reason);
     console.error('Promise:', promise);
     process.exit(1);

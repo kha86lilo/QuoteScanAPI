@@ -3,10 +3,10 @@
  * Handles health checks and connection tests
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import * as healthController from '../controllers/health.controller.js';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 /**
  * Health check endpoint

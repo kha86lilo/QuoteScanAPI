@@ -2,15 +2,22 @@
   "name": "shipping-quote-email-extractor",
   "version": "1.0.0",
   "description": "Express.js API for extracting shipping quotes from Microsoft 365 emails using Claude AI",
-  "main": "src/server.js",
+  "main": "dist/server.js",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "start": "node dist/server.js",
+    "start:ts": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "dev:js": "nodemon dist/server.js",
     "test": "node test_setup.js",
     "example": "node example_client.js",
-    "format": "prettier --write \"**/*.{js,json,md}\"",
-    "format:check": "prettier --check \"**/*.{js,json,md}\""
+    "format": "prettier --write \"**/*.{js,ts,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,ts,json,md}\"",
+    "clean": "rimraf dist",
+    "prebuild": "npm run clean",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "shipping",
@@ -41,7 +48,18 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^24.10.1",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/pg": "^8.15.6",
+    "@types/uuid": "^10.0.0",
     "nodemon": "^3.1.0",
-    "prettier": "^3.6.2"
+    "prettier": "^3.6.2",
+    "rimraf": "^6.0.1",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   }
 }

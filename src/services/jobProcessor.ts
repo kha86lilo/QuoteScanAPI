@@ -6,21 +6,41 @@
 import { v4 as uuidv4 } from 'uuid';
 import * as emailExtractor from './mail/emailExtractor.js';
 import * as db from '../config/db.js';
+import type { Job, JobData, JobStatus, JobProgress, JobResult, JobStatistics } from '../types/index.js';
+
+interface JobFilters {
+  status?: JobStatus;
+  startDate?: string;
+  endDate?: string;
+}
+
+interface DatabaseJobRow {
+  job_id: string;
+  status: JobStatus;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  job_data: JobData;
+  result: JobResult | null;
+  error: { message: string; stack?: string } | null;
+  progress: JobProgress;
+  last_received_datetime: string | null;
+}
 
 class JobProcessor {
+  private jobs: Map<string, Job>;
+
   constructor() {
-    // In-memory cache for active jobs (database is primary storage)
     this.jobs = new Map();
   }
 
   /**
    * Create a new job
-   * @param {Object} jobData - Job configuration
-   * @returns {Promise<string>} - Job ID
    */
-  async createJob(jobData) {
+  async createJob(jobData: JobData): Promise<string> {
     const jobId = uuidv4();
-    const job = {
+    const job: Job = {
       id: jobId,
       status: 'pending',
       createdAt: new Date().toISOString(),
@@ -35,13 +55,10 @@ class JobProcessor {
         total: 0,
         percentage: 0,
       },
-      lastReceivedDateTime: null,
+      lastReceivedDateTime: undefined,
     };
 
-    // Save to database first (primary storage)
     await db.saveJobToDatabase(job);
-
-    // Cache in memory for quick access
     this.jobs.set(jobId, job);
 
     return jobId;
@@ -49,20 +66,15 @@ class JobProcessor {
 
   /**
    * Get job status
-   * @param {string} jobId - Job ID
-   * @returns {Object|null} - Job object or null if not found
    */
-  async getJob(jobId) {
-    // Try in-memory first
+  async getJob(jobId: string): Promise<Job | null> {
     if (this.jobs.has(jobId)) {
-      return this.jobs.get(jobId);
+      return this.jobs.get(jobId) || null;
     }
 
-    // Try database
     try {
       const job = await db.getJobFromDatabase(jobId);
       if (job) {
-        // Cache it in memory
         this.jobs.set(jobId, job);
       }
       return job;
@@ -74,10 +86,8 @@ class JobProcessor {
 
   /**
    * Update job status
-   * @param {string} jobId - Job ID
-   * @param {Object} updates - Updates to apply
    */
-  async updateJob(jobId, updates) {
+  async updateJob(jobId: string, updates: Partial<Job>): Promise<void> {
     const job = await this.getJob(jobId);
     if (!job) {
       throw new Error(`Job ${jobId} not found`);
@@ -87,30 +97,24 @@ class JobProcessor {
       updatedAt: new Date().toISOString(),
     });
 
-    // Extract lastReceivedDateTime if present in result
     if (updates.result && updates.result.lastReceivedDateTime) {
       job.lastReceivedDateTime = updates.result.lastReceivedDateTime;
     }
 
-    // Update database first (primary storage)
     await db.updateJobInDatabase(job);
-
-    // Update in-memory cache
     this.jobs.set(jobId, job);
   }
 
   /**
    * Process a job asynchronously
-   * @param {string} jobId - Job ID
    */
-  async processJob(jobId) {
+  async processJob(jobId: string): Promise<void> {
     const job = await this.getJob(jobId);
     if (!job) {
       throw new Error(`Job ${jobId} not found`);
     }
 
     try {
-      // Update status to processing
       await this.updateJob(jobId, {
         status: 'processing',
         startedAt: new Date().toISOString(),
@@ -118,16 +122,14 @@ class JobProcessor {
 
       console.log(`\nStarting job ${jobId}...`);
 
-      // Process emails
       const result = await emailExtractor.processEmails(job.data);
 
-      // Update job with results
       await this.updateJob(jobId, {
         status: 'completed',
         completedAt: new Date().toISOString(),
         result: {
           ...result,
-          preview: undefined
+          preview: undefined,
         },
         progress: {
           current: result.fetched,
@@ -138,14 +140,15 @@ class JobProcessor {
 
       console.log(`Job ${jobId} completed successfully`);
     } catch (error) {
-      console.error(`Job ${jobId} failed:`, error);
+      const err = error as Error;
+      console.error(`Job ${jobId} failed:`, err);
 
       await this.updateJob(jobId, {
         status: 'failed',
         completedAt: new Date().toISOString(),
         error: {
-          message: error.message,
-          stack: error.stack,
+          message: err.message,
+          stack: err.stack,
         },
       });
     }
@@ -153,10 +156,8 @@ class JobProcessor {
 
   /**
    * Start processing a job (non-blocking)
-   * @param {string} jobId - Job ID
    */
-  startJob(jobId) {
-    // Process in background without awaiting
+  startJob(jobId: string): void {
     this.processJob(jobId).catch((err) => {
       console.error(`Unhandled error in job ${jobId}:`, err);
     });
@@ -164,16 +165,13 @@ class JobProcessor {
 
   /**
    * Get all jobs (with optional filtering)
-   * @param {Object} filters - Filter options
-   * @returns {Promise<Array>} - Array of jobs
    */
-  async getAllJobs(filters = {}) {
-    // Fetch from database (primary source)
+  async getAllJobs(filters: JobFilters = {}): Promise<Job[]> {
     try {
       const client = await db.pool.connect();
       try {
         let query = 'SELECT * FROM processing_jobs';
-        const params = [];
+        const params: string[] = [];
 
         if (filters.status) {
           query += ' WHERE status = $1';
@@ -184,7 +182,7 @@ class JobProcessor {
 
         const result = await client.query(query, params);
 
-        return result.rows.map((row) => ({
+        return result.rows.map((row: DatabaseJobRow) => ({
           id: row.job_id,
           status: row.status,
           createdAt: row.created_at,
@@ -195,14 +193,13 @@ class JobProcessor {
           result: row.result,
           error: row.error,
           progress: row.progress,
-          lastReceivedDateTime: row.last_received_datetime,
+          lastReceivedDateTime: row.last_received_datetime ?? undefined,
         }));
       } finally {
         client.release();
       }
     } catch (error) {
       console.error('Error fetching jobs from database:', error);
-      // Fallback to in-memory cache
       const jobs = Array.from(this.jobs.values());
       if (filters.status) {
         return jobs.filter((job) => job.status === filters.status);
@@ -212,10 +209,9 @@ class JobProcessor {
   }
 
   /**
-   * Clean up old jobs (older than specified days) 
-   * @param {number} daysOld - Number of days
+   * Clean up old jobs (older than specified days)
    */
-  async cleanupOldJobs(daysOld = 7) {
+  async cleanupOldJobs(daysOld = 7): Promise<void> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysOld);
 
@@ -224,11 +220,8 @@ class JobProcessor {
     for (const [jobId, job] of this.jobs.entries()) {
       const jobDate = new Date(job.createdAt);
       if (jobDate < cutoffDate && (job.status === 'completed' || job.status === 'failed')) {
-        // Remove from in-memory cache only
         this.jobs.delete(jobId);
         removedFromMemory++;
-
-        // Database records are preserved - do NOT delete from database 
       }
     }
 
@@ -241,18 +234,14 @@ class JobProcessor {
 
   /**
    * Get job statistics
-   * @param {Object} filters - Optional filters (e.g., date range, status)
-   * @returns {Promise<Object>} - Aggregated statistics
    */
-  async getJobStatistics(filters = {}) {
+  async getJobStatistics(filters: JobFilters = {}): Promise<JobStatistics> {
     return db.getJobStatistics(filters);
   }
 }
 
-// Export singleton instance
 const jobProcessor = new JobProcessor();
 
-// Start cleanup task (runs every 24 hours)
 setInterval(
   () => {
     jobProcessor.cleanupOldJobs(7).catch((err) => {

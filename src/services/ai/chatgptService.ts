@@ -5,10 +5,26 @@
 
 import OpenAI from 'openai';
 import BaseAIService from './BaseAIService.js';
+import type { Email, ParsedEmailData } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
+interface OpenAIModel {
+  id: string;
+  owned_by?: string;
+  created?: number;
+}
+
+interface SimplifiedModel {
+  name: string;
+  ownedBy: string | null;
+  created: number | null;
+}
+
 class ChatGPTService extends BaseAIService {
+  private client: OpenAI;
+  private modelName: string;
+
   constructor() {
     super('ChatGPT');
     const apiKey = process.env.GPT_API_KEY;
@@ -18,12 +34,8 @@ class ChatGPTService extends BaseAIService {
 
   /**
    * Parse email with ChatGPT to extract shipping quote data
-   * @param {Object} email - Raw email data from Microsoft Graph
-   * @param {number} maxRetries - Number of retry attempts for rate limits
-   * @param {string} attachmentText - Optional extracted text from attachments
-   * @returns {Promise<Object|null>} Parsed quote data
    */
-  async parseEmail(email, maxRetries = 3, attachmentText = '') {
+  async parseEmail(email: Email, maxRetries = 3, attachmentText = ''): Promise<ParsedEmailData | null> {
     const emailContent = this.prepareEmailContent(email, attachmentText);
     const prompt = this.getExtractionPrompt(emailContent);
 
@@ -48,7 +60,7 @@ class ChatGPTService extends BaseAIService {
 
       parsedData.ai_confidence_score = confidence;
 
-      console.log(`  ✓ Parsed email with ${this.serviceName} (confidence: ${confidence})`);
+      console.log(`  Success: Parsed email with ${this.serviceName} (confidence: ${confidence})`);
       return parsedData;
     }, maxRetries);
   }
@@ -56,16 +68,14 @@ class ChatGPTService extends BaseAIService {
   /**
    * Legacy method name for backward compatibility
    */
-  async parseEmailWithChatGPT(email, maxRetries = 3, attachmentText = '') {
+  async parseEmailWithChatGPT(email: Email, maxRetries = 3, attachmentText = ''): Promise<ParsedEmailData | null> {
     return this.parseEmail(email, maxRetries, attachmentText);
   }
 
   /**
    * Generate a response from a prompt
-   * @param {string} prompt - The prompt to send to the AI
-   * @returns {Promise<string>} The AI response text
    */
-  async generateResponse(prompt) {
+  async generateResponse(prompt: string): Promise<string> {
     const completion = await this.client.chat.completions.create({
       model: this.modelName,
       temperature: 0,
@@ -82,9 +92,8 @@ class ChatGPTService extends BaseAIService {
 
   /**
    * Validate OpenAI API key
-   * @returns {Promise<boolean>}
    */
-  async validateApiKey() {
+  async validateApiKey(): Promise<boolean> {
     try {
       await this.client.chat.completions.create({
         model: this.modelName,
@@ -92,26 +101,27 @@ class ChatGPTService extends BaseAIService {
       });
       return true;
     } catch (error) {
-      console.error('✗ Invalid OpenAI API key:', error.message || error.toString());
+      const err = error as Error;
+      console.error('Error: Invalid OpenAI API key:', err.message || String(error));
       return false;
     }
   }
 
   /**
    * List available OpenAI models
-   * @returns {Promise<Array>} Simplified list of models
    */
-  async listAvailableModels() {
+  async listAvailableModels(): Promise<SimplifiedModel[]> {
     try {
       const res = await this.client.models.list();
-      const models = (res.data || []).map((m) => ({
+      const models = (res.data || []).map((m: OpenAIModel) => ({
         name: m.id,
         ownedBy: m.owned_by || null,
         created: m.created || null,
       }));
       return models;
     } catch (error) {
-      console.error('✗ Error listing OpenAI models:', error.message || error.toString());
+      const err = error as Error;
+      console.error('Error: Error listing OpenAI models:', err.message || String(error));
       return [];
     }
   }
@@ -119,4 +129,6 @@ class ChatGPTService extends BaseAIService {
 
 const chatgptService = new ChatGPTService();
 export default chatgptService;
-export const { parseEmailWithChatGPT, validateApiKey, listAvailableModels } = chatgptService;
+export const parseEmailWithChatGPT = chatgptService.parseEmailWithChatGPT.bind(chatgptService);
+export const validateApiKey = chatgptService.validateApiKey.bind(chatgptService);
+export const listAvailableModels = chatgptService.listAvailableModels.bind(chatgptService);

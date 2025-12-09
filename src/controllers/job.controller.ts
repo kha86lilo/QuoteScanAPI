@@ -3,14 +3,50 @@
  * Handles job status and result retrieval
  */
 
+import type { Request, Response } from 'express';
 import jobProcessor from '../services/jobProcessor.js';
 import { asyncHandler, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
+import type { JobStatus
+ } from '../types/index.js';
+
+interface JobStatusResponse {
+  success: boolean;
+  jobId: string;
+  status: JobStatus;
+  createdAt: string;
+  updatedAt: string;
+  progress: {
+    current: number;
+    total: number;
+    percentage: number;
+  };
+  startedAt?: string;
+  completedAt?: string;
+  duration?: string;
+  result?: unknown;
+  error?: {
+    message: string;
+    stack?: string;
+  };
+  message?: string;
+}
+
+interface JobListQuery {
+  status?: JobStatus;
+  limit?: string;
+  offset?: string;
+}
+
+interface StatisticsQuery {
+  startDate?: string;
+  endDate?: string;
+}
 
 /**
  * Get job status by ID
  * GET /api/jobs/:id
  */
-export const getJobStatus = asyncHandler(async (req, res) => {
+export const getJobStatus = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const job = await jobProcessor.getJob(id);
@@ -20,7 +56,7 @@ export const getJobStatus = asyncHandler(async (req, res) => {
   }
 
   // Build response based on job status
-  const response = {
+  const response: JobStatusResponse = {
     success: true,
     jobId: job.id,
     status: job.status,
@@ -37,9 +73,9 @@ export const getJobStatus = asyncHandler(async (req, res) => {
     response.completedAt = job.completedAt;
 
     // Calculate duration
-    const start = new Date(job.startedAt);
+    const start = new Date(job.startedAt!);
     const end = new Date(job.completedAt);
-    response.duration = `${Math.round((end - start) / 1000)} seconds`;
+    response.duration = `${Math.round((end.getTime() - start.getTime()) / 1000)} seconds`;
   }
 
   // Add results if completed
@@ -49,7 +85,7 @@ export const getJobStatus = asyncHandler(async (req, res) => {
 
   // Add error if failed
   if (job.status === 'failed') {
-    response.error = job.error;
+    response.error = job.error ?? undefined;
   }
 
   // Add estimated time remaining for processing jobs
@@ -64,10 +100,10 @@ export const getJobStatus = asyncHandler(async (req, res) => {
  * Get all jobs with optional filtering
  * GET /api/jobs?status=completed
  */
-export const getAllJobs = asyncHandler(async (req, res) => {
-  const { status, limit = 50, offset = 0 } = req.query;
+export const getAllJobs = asyncHandler(async (req: Request, res: Response) => {
+  const { status, limit = '50', offset = '0' } = req.query as JobListQuery;
 
-  const filters = {};
+  const filters: { status?: JobStatus } = {};
   if (status) {
     filters.status = status;
   }
@@ -75,17 +111,19 @@ export const getAllJobs = asyncHandler(async (req, res) => {
   let jobs = await jobProcessor.getAllJobs(filters);
 
   // Sort by creation date (newest first)
-  jobs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Pagination
   const total = jobs.length;
-  jobs = jobs.slice(parseInt(offset), parseInt(offset) + parseInt(limit));
+  const limitNum = parseInt(limit);
+  const offsetNum = parseInt(offset);
+  jobs = jobs.slice(offsetNum, offsetNum + limitNum);
 
   res.json({
     success: true,
     total,
-    limit: parseInt(limit),
-    offset: parseInt(offset),
+    limit: limitNum,
+    offset: offsetNum,
     jobs: jobs.map((job) => ({
       jobId: job.id,
       status: job.status,
@@ -102,7 +140,7 @@ export const getAllJobs = asyncHandler(async (req, res) => {
  * Get job result (completed jobs only)
  * GET /api/jobs/:id/result
  */
-export const getJobResult = asyncHandler(async (req, res) => {
+export const getJobResult = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const job = await jobProcessor.getJob(id);
@@ -127,10 +165,10 @@ export const getJobResult = asyncHandler(async (req, res) => {
  * Get aggregated job statistics
  * GET /api/jobs/statistics
  */
-export const getJobStatistics = asyncHandler(async (req, res) => {
-  const { startDate, endDate } = req.query;
+export const getJobStatistics = asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query as StatisticsQuery;
 
-  const filters = {};
+  const filters: { startDate?: string; endDate?: string } = {};
   if (startDate) {
     filters.startDate = startDate;
   }
@@ -162,7 +200,7 @@ export const getJobStatistics = asyncHandler(async (req, res) => {
  * Cancel a pending or processing job
  * DELETE /api/jobs/:id
  */
-export const cancelJob = asyncHandler(async (req, res) => {
+export const cancelJob = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const job = await jobProcessor.getJob(id);

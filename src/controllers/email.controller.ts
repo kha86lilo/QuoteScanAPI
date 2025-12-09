@@ -3,21 +3,38 @@
  * Handles all email-related business logic
  */
 
+import type { Request, Response } from 'express';
 import * as emailExtractor from '../services/mail/emailExtractor.js';
 import * as microsoftGraphService from '../services/mail/microsoftGraphService.js';
-import * as claudeService from '../services/ai/claudeService.js';
+import claudeService from '../services/ai/claudeService.js';
 import jobProcessor from '../services/jobProcessor.js';
 import { getLatestLastReceivedDateTime } from '../config/db.js';
 import { asyncHandler, ValidationError } from '../middleware/errorHandler.js';
+import type { Email, JobData } from '../types/index.js';
+
+interface ProcessEmailsBody {
+  searchQuery?: string;
+  maxEmails?: number;
+  startDate?: string | null;
+  scoreThreshold?: number;
+  previewMode?: boolean;
+  async?: boolean;
+}
+
+interface CreateJobOptions {
+  message?: string;
+  additionalData?: Record<string, unknown>;
+}
 
 /**
  * Helper function to create and start an email processing job
- * @param {Object} jobData - Job configuration
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- * @param {Object} options - Additional response options
  */
-const createEmailProcessingJob = async (jobData, req, res, options = {}) => {
+const createEmailProcessingJob = async (
+  jobData: JobData,
+  req: Request,
+  res: Response,
+  options: CreateJobOptions = {}
+): Promise<Response> => {
   // Create job (now async - persists to database first)
   const jobId = await jobProcessor.createJob(jobData);
 
@@ -42,7 +59,7 @@ const createEmailProcessingJob = async (jobData, req, res, options = {}) => {
 /**
  * Process emails with filtering (async with job tracking)
  */
-export const processEmails = asyncHandler(async (req, res) => {
+export const processEmails = asyncHandler(async (req: Request, res: Response): Promise<Response | void> => {
   const {
     searchQuery = 'quote OR shipping OR freight OR cargo',
     maxEmails = 50,
@@ -50,9 +67,9 @@ export const processEmails = asyncHandler(async (req, res) => {
     scoreThreshold = 30,
     previewMode = false,
     async = true, // Default to async processing
-  } = req.body;
+  } = req.body as ProcessEmailsBody;
 
-  const jobData = {
+  const jobData: JobData = {
     searchQuery,
     maxEmails,
     startDate,
@@ -78,12 +95,12 @@ export const processEmails = asyncHandler(async (req, res) => {
  * Process only new emails since last processing job
  * Automatically uses the lastReceivedDateTime from the most recent completed job
  */
-export const processNewEmails = asyncHandler(async (req, res) => {
+export const processNewEmails = asyncHandler(async (req: Request, res: Response) => {
   // Get the latest lastReceivedDateTime from completed jobs
   const startDate = await getLatestLastReceivedDateTime();
 
   // Build job data with incremental processing parameters
-  const jobData = { 
+  const jobData: JobData = {
     maxEmails: 500,
     startDate: startDate ?? new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     scoreThreshold: 30,
@@ -102,16 +119,17 @@ export const processNewEmails = asyncHandler(async (req, res) => {
     },
   });
 });
+
 /**
  * Preview emails that would be processed
  */
-export const previewEmails = asyncHandler(async (req, res) => {
+export const previewEmails = asyncHandler(async (req: Request, res: Response) => {
   const {
     searchQuery = 'quote OR shipping OR freight OR cargo',
     maxEmails = 50,
     startDate = null,
     scoreThreshold = 30,
-  } = req.body;
+  } = req.body as ProcessEmailsBody;
 
   const preview = await emailExtractor.previewEmails({
     searchQuery,
@@ -129,12 +147,12 @@ export const previewEmails = asyncHandler(async (req, res) => {
 /**
  * Fetch emails from Microsoft 365
  */
-export const fetchEmails = asyncHandler(async (req, res) => {
+export const fetchEmails = asyncHandler(async (req: Request, res: Response) => {
   const {
     searchQuery = 'quote OR shipping OR freight OR cargo',
     maxEmails = 50,
     startDate = null,
-  } = req.body;
+  } = req.body as ProcessEmailsBody;
 
   const emails = await microsoftGraphService.fetchEmails({
     searchQuery,
@@ -149,11 +167,15 @@ export const fetchEmails = asyncHandler(async (req, res) => {
   });
 });
 
+interface ParseEmailBody {
+  email?: Email;
+}
+
 /**
  * Parse a single email with Claude
  */
-export const parseEmail = asyncHandler(async (req, res) => {
-  const { email } = req.body;
+export const parseEmail = asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body as ParseEmailBody;
 
   if (!email) {
     throw new ValidationError('Email object is required');

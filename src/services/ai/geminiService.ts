@@ -3,15 +3,46 @@
  * Handles email parsing using Google's Gemini API
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import BaseAIService from './BaseAIService.js';
+import type { Email, ParsedEmailData } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
+interface GeminiModel {
+  name?: string;
+  displayName?: string;
+  description?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  supportedGenerationMethods?: string[];
+  baseModel?: string;
+}
+
+interface SimplifiedGeminiModel {
+  name: string;
+  displayName: string;
+  description: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  supported: string[];
+  baseModel: string | null;
+}
+
+interface ModelsCache {
+  data: SimplifiedGeminiModel[];
+  timestamp: number;
+}
+
 class GeminiService extends BaseAIService {
+  private client: GoogleGenerativeAI;
+  private modelName: string;
+  private model: GenerativeModel;
+  private _modelsCache?: ModelsCache;
+
   constructor() {
     super('Gemini');
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || '';
     this.client = new GoogleGenerativeAI(apiKey);
     this.modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-05-20';
     this.model = this.client.getGenerativeModel({ model: this.modelName });
@@ -19,12 +50,8 @@ class GeminiService extends BaseAIService {
 
   /**
    * Parse email with Gemini AI to extract shipping quote data
-   * @param {Object} email - Raw email data from Microsoft Graph
-   * @param {number} maxRetries - Number of retry attempts for rate limits
-   * @param {string} attachmentText - Optional extracted text from attachments
-   * @returns {Promise<Object|null>} Parsed quote data
    */
-  async parseEmail(email, maxRetries = 3, attachmentText = '') {
+  async parseEmail(email: Email, maxRetries = 3, attachmentText = ''): Promise<ParsedEmailData | null> {
     const emailContent = this.prepareEmailContent(email, attachmentText);
     const prompt = this.getExtractionPrompt(emailContent);
 
@@ -39,7 +66,7 @@ class GeminiService extends BaseAIService {
 
       parsedData.ai_confidence_score = confidence;
 
-      console.log(`  ✓ Parsed email with ${this.serviceName} (confidence: ${confidence})`);
+      console.log(`  Success: Parsed email with ${this.serviceName} (confidence: ${confidence})`);
       return parsedData;
     }, maxRetries);
   }
@@ -47,16 +74,14 @@ class GeminiService extends BaseAIService {
   /**
    * Legacy method name for backward compatibility
    */
-  async parseEmailWithGemini(email, maxRetries = 3, attachmentText = '') {
+  async parseEmailWithGemini(email: Email, maxRetries = 3, attachmentText = ''): Promise<ParsedEmailData | null> {
     return this.parseEmail(email, maxRetries, attachmentText);
   }
 
   /**
    * Generate a response from a prompt
-   * @param {string} prompt - The prompt to send to the AI
-   * @returns {Promise<string>} The AI response text
    */
-  async generateResponse(prompt) {
+  async generateResponse(prompt: string): Promise<string> {
     const result = await this.model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
     });
@@ -65,33 +90,30 @@ class GeminiService extends BaseAIService {
 
   /**
    * Validate Gemini API key
-   * @returns {Promise<boolean>}
    */
-  async validateApiKey() {
+  async validateApiKey(): Promise<boolean> {
     try {
       await this.model.generateContent({
         contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
       });
       return true;
     } catch (error) {
-      console.error('✗ Invalid Gemini API key:', error.message || error.toString());
+      const err = error as Error;
+      console.error('Error: Invalid Gemini API key:', err.message || String(error));
       return false;
     }
   }
 
   /**
    * List available Gemini models from the API
-   * @param {boolean} filterGenerateContent - When true, only include models supporting generateContent
-   * @returns {Promise<Array>} Simplified list of models
    */
-  async listAvailableModels(filterGenerateContent = true) {
+  async listAvailableModels(filterGenerateContent = true): Promise<SimplifiedGeminiModel[]> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.error('✗ GEMINI_API_KEY is not set');
+      console.error('Error: GEMINI_API_KEY is not set');
       return [];
     }
 
-    // Simple in-memory cache to avoid frequent calls
     const now = Date.now();
     if (
       this._modelsCache &&
@@ -107,12 +129,12 @@ class GeminiService extends BaseAIService {
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        console.error(`✗ Failed to list models: ${res.status} ${res.statusText}`);
+        console.error(`Error: Failed to list models: ${res.status} ${res.statusText}`);
         return [];
       }
-      const json = await res.json();
-      const models = (json.models || []).map((m) => {
-        const name = m.name?.startsWith('models/') ? m.name.replace('models/', '') : m.name;
+      const json = (await res.json()) as { models?: GeminiModel[] };
+      const models: SimplifiedGeminiModel[] = (json.models || []).map((m) => {
+        const name = m.name?.startsWith('models/') ? m.name.replace('models/', '') : m.name || '';
         return {
           name,
           displayName: m.displayName || name,
@@ -130,7 +152,8 @@ class GeminiService extends BaseAIService {
         ? models.filter((m) => (m.supported || []).includes('generateContent'))
         : models;
     } catch (error) {
-      console.error('✗ Error fetching models:', error.message || error.toString());
+      const err = error as Error;
+      console.error('Error: Error fetching models:', err.message || String(error));
       return [];
     }
   }
@@ -138,4 +161,6 @@ class GeminiService extends BaseAIService {
 
 const geminiService = new GeminiService();
 export default geminiService;
-export const { parseEmailWithGemini, validateApiKey, listAvailableModels } = geminiService;
+export const parseEmailWithGemini = geminiService.parseEmailWithGemini.bind(geminiService);
+export const validateApiKey = geminiService.validateApiKey.bind(geminiService);
+export const listAvailableModels = geminiService.listAvailableModels.bind(geminiService);

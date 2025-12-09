@@ -5,10 +5,14 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import BaseAIService from './BaseAIService.js';
+import type { Email, ParsedEmailData } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
 class ClaudeService extends BaseAIService {
+  private client: Anthropic;
+  private modelName: string;
+
   constructor() {
     super('Claude');
     this.client = new Anthropic({
@@ -19,12 +23,8 @@ class ClaudeService extends BaseAIService {
 
   /**
    * Parse email with Claude AI to extract shipping quote data
-   * @param {Object} email - Raw email data from Microsoft Graph
-   * @param {number} maxRetries - Number of retry attempts for rate limits
-   * @param {string} attachmentText - Optional extracted text from attachments
-   * @returns {Promise<Object|null>} Parsed quote data
    */
-  async parseEmail(email, maxRetries = 3, attachmentText = '') {
+  async parseEmail(email: Email, maxRetries = 3, attachmentText = ''): Promise<ParsedEmailData | null> {
     const emailContent = this.prepareEmailContent(email, attachmentText);
     const prompt = this.getExtractionPrompt(emailContent);
 
@@ -35,13 +35,17 @@ class ClaudeService extends BaseAIService {
         messages: [{ role: 'user', content: prompt }],
       });
 
-      const responseText = message.content[0].text.trim();
+      const content = message.content[0];
+      if (content.type !== 'text') {
+        throw new Error('Unexpected response type from Claude');
+      }
+      const responseText = content.text.trim();
       const parsedData = this.cleanAndParseResponse(responseText);
       const confidence = this.calculateConfidence(parsedData);
 
       parsedData.ai_confidence_score = confidence;
 
-      console.log(`  ✓ Parsed email with ${this.serviceName} (confidence: ${confidence})`);
+      console.log(`  Success: Parsed email with ${this.serviceName} (confidence: ${confidence})`);
       return parsedData;
     }, maxRetries);
   }
@@ -49,29 +53,30 @@ class ClaudeService extends BaseAIService {
   /**
    * Legacy method name for backward compatibility
    */
-  async parseEmailWithClaude(email, maxRetries = 3, attachmentText = '') {
+  async parseEmailWithClaude(email: Email, maxRetries = 3, attachmentText = ''): Promise<ParsedEmailData | null> {
     return this.parseEmail(email, maxRetries, attachmentText);
   }
 
   /**
    * Generate a response from a prompt
-   * @param {string} prompt - The prompt to send to the AI
-   * @returns {Promise<string>} The AI response text
    */
-  async generateResponse(prompt) {
+  async generateResponse(prompt: string): Promise<string> {
     const message = await this.client.messages.create({
       model: this.modelName,
       max_tokens: 4000,
       messages: [{ role: 'user', content: prompt }],
     });
-    return message.content[0].text.trim();
+    const content = message.content[0];
+    if (content.type !== 'text') {
+      throw new Error('Unexpected response type from Claude');
+    }
+    return content.text.trim();
   }
 
   /**
    * Validate Claude API key
-   * @returns {Promise<boolean>}
    */
-  async validateApiKey() {
+  async validateApiKey(): Promise<boolean> {
     try {
       await this.client.messages.create({
         model: this.modelName,
@@ -80,7 +85,8 @@ class ClaudeService extends BaseAIService {
       });
       return true;
     } catch (error) {
-      console.error('✗ Invalid Anthropic API key:', error.message);
+      const err = error as Error;
+      console.error('Error: Invalid Anthropic API key:', err.message);
       return false;
     }
   }
@@ -88,4 +94,4 @@ class ClaudeService extends BaseAIService {
 
 const claudeService = new ClaudeService();
 export default claudeService;
-export const { parseEmailWithClaude, testConnection } = claudeService;
+export const parseEmailWithClaude = claudeService.parseEmailWithClaude.bind(claudeService);

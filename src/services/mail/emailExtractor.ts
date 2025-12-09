@@ -7,24 +7,63 @@ import * as microsoftGraphService from './microsoftGraphService.js';
 import * as emailFilter from './emailFilter.js';
 import * as db from '../../config/db.js';
 import { getAIService, getProviderInfo } from '../ai/aiServiceFactory.js';
+import type {
+  Email,
+  ProcessingSummary,
+  ProcessingError,
+  FilterPreview,
+  ProcessedResults,
+  FilteredResults,
+} from '../../types/index.js';
+
+interface ProcessEmailsOptions {
+  searchQuery?: string;
+  maxEmails?: number;
+  startDate?: string | null;
+  scoreThreshold?: number;
+  previewMode?: boolean;
+  aiProvider?: string | null;
+}
+
+interface ProcessEmailsResult {
+  fetched: number;
+  filtered: FilteredResults;
+  processed: ProcessedResults;
+  estimatedCost: number;
+  estimatedSavings: number;
+  errors: ProcessingError[];
+  lastReceivedDateTime: string | null;
+  newQuoteIds: number[];
+  preview?: FilterPreview;
+  summary?: ProcessingSummary;
+}
+
+interface PreviewEmailsOptions {
+  searchQuery?: string;
+  maxEmails?: number;
+  startDate?: string | null;
+  scoreThreshold?: number;
+}
+
+interface PreviewEmailsResult {
+  emails: Email[];
+  preview: FilterPreview | null;
+}
 
 class EmailExtractorService {
   /**
    * Process emails with pre-filtering
-   * @param {Object} options - Processing options
-   * @returns {Promise<Object>} Processing results
    */
-  async processEmails(options = {}) {
+  async processEmails(options: ProcessEmailsOptions = {}): Promise<ProcessEmailsResult> {
     const {
       searchQuery = '',
       maxEmails = 100,
       startDate = null,
       scoreThreshold = 30,
       previewMode = false,
-      aiProvider = null, // Optional: override AI provider
+      aiProvider = null,
     } = options;
 
-    // Get configured AI service
     const aiService = getAIService(aiProvider);
     const providerInfo = getProviderInfo();
 
@@ -32,10 +71,10 @@ class EmailExtractorService {
     console.log('EMAIL EXTRACTION WITH PRE-FILTERING');
     console.log('='.repeat(60));
     console.log(`AI Provider: ${providerInfo.current.toUpperCase()}`);
-    console.log(`Model: ${providerInfo.models[providerInfo.current]}`);
+    console.log(`Model: ${providerInfo.models[providerInfo.current as keyof typeof providerInfo.models]}`);
     console.log('='.repeat(60) + '\n');
 
-    const results = {
+    const results: ProcessEmailsResult = {
       fetched: 0,
       filtered: { toProcess: 0, toSkip: 0 },
       processed: { successful: 0, skipped: 0, failed: 0 },
@@ -43,13 +82,12 @@ class EmailExtractorService {
       estimatedSavings: 0,
       errors: [],
       lastReceivedDateTime: null,
-      newQuoteIds: [], // Track for optional separate matching
+      newQuoteIds: [],
     };
 
     try {
-      // Fetch emails
       console.log(`Fetching emails with search: '${searchQuery}'`);
-      const emails = await microsoftGraphService.fetchEmails({
+      const emails = await microsoftGraphService.default.fetchEmails({
         searchQuery,
         top: maxEmails,
         startDate,
@@ -62,7 +100,6 @@ class EmailExtractorService {
         return results;
       }
 
-      // Pre-filter emails
       console.log(`\n${'='.repeat(60)}`);
       console.log('STEP 1: PRE-FILTERING EMAILS');
       console.log(`${'='.repeat(60)}\n`);
@@ -74,10 +111,9 @@ class EmailExtractorService {
       results.estimatedCost = summary.estimatedCost;
       results.estimatedSavings = summary.estimatedSavings;
 
-      // Track the maximum receivedDateTime from fetched emails
       if (emails.length > 0) {
         const maxReceivedDateTime = emails.reduce((max, email) => {
-          const emailDate = new Date(email.receivedDateTime);
+          const emailDate = new Date(email.receivedDateTime || '');
           return emailDate > max ? emailDate : max;
         }, new Date(0));
         results.lastReceivedDateTime = maxReceivedDateTime.toISOString();
@@ -85,26 +121,25 @@ class EmailExtractorService {
 
       console.log(`Total emails fetched: ${summary.total}`);
       console.log(
-        `✓ Passed filter (>= ${scoreThreshold}): ${summary.toProcess} (${summary.processPercentage}%)`
+        `Passed filter (>= ${scoreThreshold}): ${summary.toProcess} (${summary.processPercentage}%)`
       );
-      console.log(`✗ Filtered out: ${summary.toSkip}`);
-      console.log(`💰 Estimated API cost: $${summary.estimatedCost.toFixed(2)}`);
-      console.log(`💾 Cost savings from filtering: $${summary.estimatedSavings.toFixed(2)}`);
+      console.log(`Filtered out: ${summary.toSkip}`);
+      console.log(`Estimated API cost: $${summary.estimatedCost.toFixed(2)}`);
+      console.log(`Cost savings from filtering: $${summary.estimatedSavings.toFixed(2)}`);
 
       if (previewMode) {
-        console.log('\n⚠️ PREVIEW MODE - No emails will be processed');
-        results.preview = { toProcess, toSkip, summary };
+        console.log('\nPREVIEW MODE - No emails will be processed');
+        results.preview = { toProcess: [], toSkip: [], summary, threshold: scoreThreshold };
         return results;
       }
 
       if (toProcess.length === 0) {
         console.log(
-          '\n❌ No emails passed the filter. Try lowering the threshold or adjusting search terms.'
+          '\nNo emails passed the filter. Try lowering the threshold or adjusting search terms.'
         );
         return results;
       }
 
-      // Process filtered emails
       console.log(`\n${'='.repeat(60)}`);
       console.log(
         `STEP 2: PROCESSING FILTERED EMAILS WITH ${providerInfo.current.toUpperCase()} AI`
@@ -113,20 +148,21 @@ class EmailExtractorService {
 
       for (let i = 0; i < toProcess.length; i++) {
         const email = toProcess[i];
+        if (!email) continue;
+
         const emailNum = i + 1;
         const subject = (email.subject || 'No Subject').substring(0, 50);
 
         console.log(`[${emailNum}/${toProcess.length}] Processing: ${subject}...`);
 
         try {
-          // Check if already processed
           const exists = await db.checkEmailExists(email.id);
           if (exists) {
-            console.log(`  ⊘ Already processed, skipping`);
+            console.log(`  Already processed, skipping`);
             results.processed.skipped++;
             continue;
-          } 
-          const parsedData = await aiService.parseEmail(email, 3, email.attachmentText);
+          }
+          const parsedData = await aiService.parseEmail(email, 3, email.attachmentText || '');
 
           if (!parsedData) {
             results.processed.failed++;
@@ -138,9 +174,8 @@ class EmailExtractorService {
             continue;
           }
 
-          // Validate parsed data structure
           if (!parsedData.quotes || parsedData.quotes.length === 0) {
-            console.log(`  ⚠ No quotes extracted from email`);
+            console.log(`  Warning: No quotes extracted from email`);
             results.processed.failed++;
             results.errors.push({
               emailId: email.id,
@@ -150,44 +185,41 @@ class EmailExtractorService {
             continue;
           }
 
-          // Save to database (handles multiple quotes)
           const saveResult = await db.saveQuoteToDatabase(email, parsedData);
-          console.log(`  ✓ Saved ${saveResult.quotes_count} quote(s) to database`);
+          console.log(`  Saved ${saveResult.quotes_count} quote(s) to database`);
           results.processed.successful++;
 
-          // Track new quote IDs for optional separate matching
           if (saveResult.quote_ids && saveResult.quote_ids.length > 0) {
             results.newQuoteIds.push(...saveResult.quote_ids);
           }
         } catch (error) {
-          console.error(`  ✗ Error processing email:`, error.message);
+          const err = error as Error;
+          console.error(`  Error processing email:`, err.message);
           results.processed.failed++;
           results.errors.push({
             emailId: email.id,
             subject: email.subject,
-            error: error.message,
+            error: err.message,
           });
         }
       }
 
-      // Summary
       console.log('\n' + '='.repeat(60));
       console.log('PROCESSING COMPLETE');
       console.log('='.repeat(60));
-      console.log(`📊 Fetched: ${results.fetched} emails`);
-      console.log(`✓ Passed filter: ${results.filtered.toProcess} emails`);
-      console.log(`⊘ Filtered out: ${results.filtered.toSkip} emails`);
-      console.log(`✓ Successfully processed: ${results.processed.successful}`);
-      console.log(`⊘ Skipped (already in DB): ${results.processed.skipped}`);
-      console.log(`✗ Failed: ${results.processed.failed}`);
-      console.log(`📝 New quote IDs: ${results.newQuoteIds.length}`);
-      const requestPrice = parseFloat(process.env.REQUEST_PRICE) || 0.015;
+      console.log(`Fetched: ${results.fetched} emails`);
+      console.log(`Passed filter: ${results.filtered.toProcess} emails`);
+      console.log(`Filtered out: ${results.filtered.toSkip} emails`);
+      console.log(`Successfully processed: ${results.processed.successful}`);
+      console.log(`Skipped (already in DB): ${results.processed.skipped}`);
+      console.log(`Failed: ${results.processed.failed}`);
+      console.log(`New quote IDs: ${results.newQuoteIds.length}`);
+      const requestPrice = parseFloat(process.env.REQUEST_PRICE || '') || 0.015;
       const actualCost = results.processed.successful * requestPrice;
-      console.log(`💰 Actual cost: $${actualCost.toFixed(2)}`);
-      console.log(`💾 Money saved: $${results.estimatedSavings.toFixed(2)}`);
+      console.log(`Actual cost: $${actualCost.toFixed(2)}`);
+      console.log(`Money saved: $${results.estimatedSavings.toFixed(2)}`);
       console.log('='.repeat(60) + '\n');
 
-      // Create comprehensive summary
       results.summary = {
         fetched: results.fetched,
         filtered: results.filtered,
@@ -197,7 +229,7 @@ class EmailExtractorService {
         estimatedSavings: results.estimatedSavings,
         actualCost: actualCost,
         aiProvider: providerInfo.current,
-        model: providerInfo.models[providerInfo.current],
+        model: providerInfo.models[providerInfo.current as keyof typeof providerInfo.models],
         searchQuery: searchQuery,
         scoreThreshold: scoreThreshold,
         completedAt: new Date().toISOString(),
@@ -206,10 +238,11 @@ class EmailExtractorService {
 
       return results;
     } catch (error) {
-      console.error('✗ Error in email processing:', error);
+      const err = error as Error;
+      console.error('Error in email processing:', err);
       results.errors.push({
-        error: error.message,
-        stack: error.stack,
+        error: err.message,
+        stack: err.stack,
       });
       throw error;
     }
@@ -217,10 +250,8 @@ class EmailExtractorService {
 
   /**
    * Preview emails that would be processed
-   * @param {Object} options - Search options
-   * @returns {Promise<Object>} Preview data
    */
-  async previewEmails(options = {}) {
+  async previewEmails(options: PreviewEmailsOptions = {}): Promise<PreviewEmailsResult> {
     const {
       searchQuery = 'quote OR shipping OR freight OR cargo',
       maxEmails = 100,
@@ -228,7 +259,7 @@ class EmailExtractorService {
       scoreThreshold = 30,
     } = options;
 
-    const emails = await microsoftGraphService.fetchEmails({
+    const emails = await microsoftGraphService.default.fetchEmails({
       searchQuery,
       top: maxEmails,
       startDate,
@@ -238,7 +269,7 @@ class EmailExtractorService {
       return { emails: [], preview: null };
     }
 
-    const preview = emailFilter.generatePreview(emails, scoreThreshold);
+    const preview = await emailFilter.generatePreview(emails, scoreThreshold);
 
     return {
       emails,
@@ -248,7 +279,6 @@ class EmailExtractorService {
 
   /**
    * Get processing statistics
-   * @returns {Promise<Object>}
    */
   async getStats() {
     return await db.getProcessingStats();
@@ -256,14 +286,13 @@ class EmailExtractorService {
 
   /**
    * Helper function to sleep
-   * @param {number} ms - Milliseconds to sleep
-   * @returns {Promise}
    */
-  sleep(ms) {
+  sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
 const emailExtractorService = new EmailExtractorService();
 export default emailExtractorService;
-export const { processEmails, previewEmails } = emailExtractorService;
+export const processEmails = emailExtractorService.processEmails.bind(emailExtractorService);
+export const previewEmails = emailExtractorService.previewEmails.bind(emailExtractorService);

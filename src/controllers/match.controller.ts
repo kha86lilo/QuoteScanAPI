@@ -3,6 +3,7 @@
  * Handles quote matching and feedback operations
  */
 
+import type { Request, Response } from 'express';
 import * as db from '../config/db.js';
 import {
   asyncHandler,
@@ -23,9 +24,17 @@ import {
 import emailExtractorService from '../services/mail/emailExtractor.js';
 import jobProcessor from '../services/jobProcessor.js';
 import { getLatestLastReceivedDateTime } from '../config/db.js';
+import type {
+  FeedbackReason,
+  MatchCriteria,
+  Quote,
+  MatchResult,
+  MatchingOptions,
+  LearningResult,
+} from '../types/index.js';
 
 // Valid feedback reasons for validation
-const VALID_FEEDBACK_REASONS = [
+const VALID_FEEDBACK_REASONS: FeedbackReason[] = [
   'good_match',
   'excellent_suggestion',
   'wrong_route',
@@ -37,14 +46,87 @@ const VALID_FEEDBACK_REASONS = [
   'other',
 ];
 
+interface MatchQuery {
+  limit?: string;
+  minScore?: string;
+}
+
+interface CreateMatchBody {
+  sourceQuoteId: number;
+  matchedQuoteId: number;
+  similarityScore: number;
+  matchCriteria?: MatchCriteria;
+  suggestedPrice?: number;
+  priceConfidence?: number;
+  algorithmVersion?: string;
+}
+
+interface BulkMatchBody {
+  matches: CreateMatchBody[];
+}
+
+interface FeedbackBody {
+  rating: 1 | -1;
+  feedbackReason?: FeedbackReason;
+  feedbackNotes?: string;
+  actualPriceUsed?: number;
+  userId?: string;
+}
+
+interface FeedbackStatsQuery {
+  algorithmVersion?: string;
+  startDate?: string;
+  endDate?: string;
+}
+
+interface ExtractAndMatchBody {
+  searchQuery?: string;
+  maxEmails?: number;
+  startDate?: string | null;
+  scoreThreshold?: number;
+  minScore?: number;
+  maxMatches?: number;
+  useAI?: boolean;
+  async?: boolean;
+}
+
+interface RunMatchingBody {
+  quoteIds: number[];
+  minScore?: number;
+  maxMatches?: number;
+  useAI?: boolean;
+}
+
+interface AnalyzeQuoteBody {
+  origin_city?: string;
+  origin_state_province?: string;
+  origin_country?: string;
+  destination_city?: string;
+  destination_state_province?: string;
+  destination_country?: string;
+  service_type?: string;
+  cargo_description?: string;
+  cargo_weight?: number;
+  weight_unit?: string;
+  number_of_pieces?: number;
+  hazardous_material?: boolean;
+}
+
+interface PricingOutcomeBody {
+  actualPriceQuoted?: number;
+  actualPriceAccepted?: number;
+  jobWon?: boolean;
+}
+
 /**
  * Get matches for a specific quote
  * GET /api/matches/quote/:quoteId
  */
-export const getMatchesForQuote = asyncHandler(async (req, res) => {
+export const getMatchesForQuote = asyncHandler(async (req: Request, res: Response) => {
   const { quoteId } = req.params;
-  const limit = parseInt(req.query.limit) || 10;
-  const minScore = parseFloat(req.query.minScore) || 0;
+  const { limit: limitStr, minScore: minScoreStr } = req.query as MatchQuery;
+  const limit = parseInt(limitStr || '10');
+  const minScore = parseFloat(minScoreStr || '0');
 
   try {
     const matches = await db.getMatchesForQuote(quoteId, { limit, minScore });
@@ -56,7 +138,7 @@ export const getMatchesForQuote = asyncHandler(async (req, res) => {
       matches,
     });
   } catch (error) {
-    throw new DatabaseError('fetching matches for quote', error);
+    throw new DatabaseError('fetching matches for quote', error as Error);
   }
 });
 
@@ -64,7 +146,7 @@ export const getMatchesForQuote = asyncHandler(async (req, res) => {
  * Get a single match by ID
  * GET /api/matches/:matchId
  */
-export const getMatchById = asyncHandler(async (req, res) => {
+export const getMatchById = asyncHandler(async (req: Request, res: Response) => {
   const { matchId } = req.params;
 
   try {
@@ -80,7 +162,7 @@ export const getMatchById = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('fetching match by ID', error);
+    throw new DatabaseError('fetching match by ID', error as Error);
   }
 });
 
@@ -88,7 +170,7 @@ export const getMatchById = asyncHandler(async (req, res) => {
  * Create a new match (typically called by matching algorithm)
  * POST /api/matches
  */
-export const createMatch = asyncHandler(async (req, res) => {
+export const createMatch = asyncHandler(async (req: Request, res: Response) => {
   const {
     sourceQuoteId,
     matchedQuoteId,
@@ -97,7 +179,7 @@ export const createMatch = asyncHandler(async (req, res) => {
     suggestedPrice,
     priceConfidence,
     algorithmVersion,
-  } = req.body;
+  } = req.body as CreateMatchBody;
 
   // Validation
   if (!sourceQuoteId || !matchedQuoteId) {
@@ -129,7 +211,7 @@ export const createMatch = asyncHandler(async (req, res) => {
       match,
     });
   } catch (error) {
-    throw new DatabaseError('creating match', error);
+    throw new DatabaseError('creating match', error as Error);
   }
 });
 
@@ -137,8 +219,8 @@ export const createMatch = asyncHandler(async (req, res) => {
  * Create multiple matches in bulk
  * POST /api/matches/bulk
  */
-export const createMatchesBulk = asyncHandler(async (req, res) => {
-  const { matches } = req.body;
+export const createMatchesBulk = asyncHandler(async (req: Request, res: Response) => {
+  const { matches } = req.body as BulkMatchBody;
 
   if (!matches || !Array.isArray(matches) || matches.length === 0) {
     throw new ValidationError('matches array is required and cannot be empty');
@@ -167,7 +249,7 @@ export const createMatchesBulk = asyncHandler(async (req, res) => {
       matches: createdMatches,
     });
   } catch (error) {
-    throw new DatabaseError('creating matches in bulk', error);
+    throw new DatabaseError('creating matches in bulk', error as Error);
   }
 });
 
@@ -175,7 +257,7 @@ export const createMatchesBulk = asyncHandler(async (req, res) => {
  * Delete a match
  * DELETE /api/matches/:matchId
  */
-export const deleteMatch = asyncHandler(async (req, res) => {
+export const deleteMatch = asyncHandler(async (req: Request, res: Response) => {
   const { matchId } = req.params;
 
   try {
@@ -191,7 +273,7 @@ export const deleteMatch = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('deleting match', error);
+    throw new DatabaseError('deleting match', error as Error);
   }
 });
 
@@ -203,9 +285,10 @@ export const deleteMatch = asyncHandler(async (req, res) => {
  * Submit feedback for a match
  * POST /api/matches/:matchId/feedback
  */
-export const submitFeedback = asyncHandler(async (req, res) => {
+export const submitFeedback = asyncHandler(async (req: Request, res: Response) => {
   const { matchId } = req.params;
-  const { rating, feedbackReason, feedbackNotes, actualPriceUsed, userId } = req.body;
+  const { rating, feedbackReason, feedbackNotes, actualPriceUsed, userId } =
+    req.body as FeedbackBody;
 
   // Validation
   if (rating === undefined || (rating !== -1 && rating !== 1)) {
@@ -240,7 +323,7 @@ export const submitFeedback = asyncHandler(async (req, res) => {
       feedback,
     });
   } catch (error) {
-    throw new DatabaseError('submitting feedback', error);
+    throw new DatabaseError('submitting feedback', error as Error);
   }
 });
 
@@ -248,7 +331,7 @@ export const submitFeedback = asyncHandler(async (req, res) => {
  * Get feedback for a specific match
  * GET /api/matches/:matchId/feedback
  */
-export const getFeedbackForMatch = asyncHandler(async (req, res) => {
+export const getFeedbackForMatch = asyncHandler(async (req: Request, res: Response) => {
   const { matchId } = req.params;
 
   try {
@@ -261,7 +344,7 @@ export const getFeedbackForMatch = asyncHandler(async (req, res) => {
       feedback,
     });
   } catch (error) {
-    throw new DatabaseError('fetching feedback for match', error);
+    throw new DatabaseError('fetching feedback for match', error as Error);
   }
 });
 
@@ -269,8 +352,8 @@ export const getFeedbackForMatch = asyncHandler(async (req, res) => {
  * Get overall feedback statistics
  * GET /api/matches/feedback/stats
  */
-export const getFeedbackStatistics = asyncHandler(async (req, res) => {
-  const { algorithmVersion, startDate, endDate } = req.query;
+export const getFeedbackStatistics = asyncHandler(async (req: Request, res: Response) => {
+  const { algorithmVersion, startDate, endDate } = req.query as FeedbackStatsQuery;
 
   try {
     const stats = await db.getFeedbackStatistics({
@@ -284,7 +367,7 @@ export const getFeedbackStatistics = asyncHandler(async (req, res) => {
       statistics: stats,
     });
   } catch (error) {
-    throw new DatabaseError('fetching feedback statistics', error);
+    throw new DatabaseError('fetching feedback statistics', error as Error);
   }
 });
 
@@ -292,7 +375,7 @@ export const getFeedbackStatistics = asyncHandler(async (req, res) => {
  * Get feedback breakdown by reason
  * GET /api/matches/feedback/by-reason
  */
-export const getFeedbackByReason = asyncHandler(async (req, res) => {
+export const getFeedbackByReason = asyncHandler(async (req: Request, res: Response) => {
   try {
     const breakdown = await db.getFeedbackByReason();
 
@@ -301,7 +384,7 @@ export const getFeedbackByReason = asyncHandler(async (req, res) => {
       breakdown,
     });
   } catch (error) {
-    throw new DatabaseError('fetching feedback by reason', error);
+    throw new DatabaseError('fetching feedback by reason', error as Error);
   }
 });
 
@@ -309,7 +392,7 @@ export const getFeedbackByReason = asyncHandler(async (req, res) => {
  * Get match criteria performance analysis
  * GET /api/matches/feedback/criteria-performance
  */
-export const getMatchCriteriaPerformance = asyncHandler(async (req, res) => {
+export const getMatchCriteriaPerformance = asyncHandler(async (req: Request, res: Response) => {
   try {
     const performance = await db.getMatchCriteriaPerformance();
 
@@ -324,10 +407,9 @@ export const getMatchCriteriaPerformance = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    throw new DatabaseError('fetching criteria performance', error);
+    throw new DatabaseError('fetching criteria performance', error as Error);
   }
 });
-
 
 // =====================================================
 // Extract and Match Combined Endpoints
@@ -338,21 +420,24 @@ export const getMatchCriteriaPerformance = asyncHandler(async (req, res) => {
  * POST /api/matches/extract-and-match
  * Body: { searchQuery?, maxEmails?, startDate?, scoreThreshold?, minScore?, maxMatches?, useAI?, async? }
  */
-export const extractAndMatch = asyncHandler(async (req, res) => {
+export const extractAndMatch = asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as ExtractAndMatchBody;
   const lastProcessDate =
-    req.body.startDate ??
+    body.startDate ??
     (await getLatestLastReceivedDateTime()) ??
     new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(); // Default to 3 days ago
+
   const {
     searchQuery = '',
     maxEmails = 500,
-    startDate = lastProcessDate,
     scoreThreshold = 50,
     minScore = 0.45,
     maxMatches = 3,
     useAI = true,
-    async = true,
-  } = req.body;
+    async: isAsync = true,
+  } = body;
+
+  const startDate = body.startDate ?? lastProcessDate;
 
   const jobData = {
     searchQuery,
@@ -363,10 +448,10 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
       minScore,
       maxMatches,
       useAI,
-    },
+    } as MatchingOptions,
   };
 
-  if (async) {
+  if (isAsync) {
     const jobId = await jobProcessor.createJob(jobData);
 
     processExtractAndMatchJob(jobId, jobData).catch((err) => {
@@ -393,7 +478,12 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
       scoreThreshold,
     });
 
-    let matchingResults = { processed: 0, matchesCreated: 0, errors: [], matchDetails: [] };
+    let matchingResults: MatchResult = {
+      processed: 0,
+      matchesCreated: 0,
+      errors: [],
+      matchDetails: [],
+    };
 
     if (extractionResults.newQuoteIds && extractionResults.newQuoteIds.length > 0) {
       matchingResults = await processEnhancedMatches(extractionResults.newQuoteIds, {
@@ -422,7 +512,7 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    throw new DatabaseError('extract and match operation', error);
+    throw new DatabaseError('extract and match operation', error as Error);
   }
 });
 
@@ -435,8 +525,9 @@ export const extractAndMatch = asyncHandler(async (req, res) => {
  * POST /api/matches/run
  * Body: { quoteIds: [1, 2, 3], minScore?: 0.45, maxMatches?: 10, useAI?: true }
  */
-export const runMatchingForQuotes = asyncHandler(async (req, res) => {
-  const { quoteIds, minScore = 0.45, maxMatches = 10, useAI = true } = req.body;
+export const runMatchingForQuotes = asyncHandler(async (req: Request, res: Response) => {
+  const { quoteIds, minScore = 0.45, maxMatches = 10, useAI = true } =
+    req.body as RunMatchingBody;
 
   if (!quoteIds || !Array.isArray(quoteIds) || quoteIds.length === 0) {
     throw new ValidationError('quoteIds array is required and cannot be empty');
@@ -466,7 +557,7 @@ export const runMatchingForQuotes = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    throw new DatabaseError('running matching algorithm', error);
+    throw new DatabaseError('running matching algorithm', error as Error);
   }
 });
 
@@ -475,9 +566,10 @@ export const runMatchingForQuotes = asyncHandler(async (req, res) => {
  * GET /api/matches/pricing-suggestion/:quoteId
  * Returns matches + AI prompt for pricing recommendation
  */
-export const getPricingSuggestion = asyncHandler(async (req, res) => {
+export const getPricingSuggestion = asyncHandler(async (req: Request, res: Response) => {
   const { quoteId } = req.params;
-  const limit = parseInt(req.query.limit) || 5;
+  const { limit: limitStr } = req.query as { limit?: string };
+  const limit = parseInt(limitStr || '5');
 
   const quoteIdInt = parseInt(quoteId);
   if (isNaN(quoteIdInt)) {
@@ -507,21 +599,28 @@ export const getPricingSuggestion = asyncHandler(async (req, res) => {
     const pricingPrompt = generatePricingPrompt(sourceQuote, matches);
 
     // Calculate aggregate suggested price
-    let aggregateSuggestion = null;
+    let aggregateSuggestion: {
+      weightedAverage: number;
+      range: { low: number; high: number };
+      confidence: number;
+      basedOn: number;
+    } | null = null;
+
     if (matches.length > 0) {
       const pricesWithConfidence = matches
-        .filter(m => m.suggestedPrice && m.suggestedPrice > 0)
-        .map(m => ({
-          price: m.suggestedPrice,
-          confidence: m.priceConfidence,
-          weight: m.similarityScore * m.priceConfidence,
+        .filter((m) => m.suggested_price && m.suggested_price > 0)
+        .map((m) => ({
+          price: m.suggested_price!,
+          confidence: m.price_confidence || 0.5,
+          weight: m.similarity_score * (m.price_confidence || 0.5),
         }));
 
       if (pricesWithConfidence.length > 0) {
         const totalWeight = pricesWithConfidence.reduce((sum, p) => sum + p.weight, 0);
-        const weightedAvg = pricesWithConfidence.reduce((sum, p) => sum + p.price * p.weight, 0) / totalWeight;
+        const weightedAvg =
+          pricesWithConfidence.reduce((sum, p) => sum + p.price * p.weight, 0) / totalWeight;
 
-        const prices = pricesWithConfidence.map(p => p.price);
+        const prices = pricesWithConfidence.map((p) => p.price);
         aggregateSuggestion = {
           weightedAverage: Math.round(weightedAvg),
           range: {
@@ -553,7 +652,7 @@ export const getPricingSuggestion = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('generating pricing suggestion', error);
+    throw new DatabaseError('generating pricing suggestion', error as Error);
   }
 });
 
@@ -562,7 +661,7 @@ export const getPricingSuggestion = asyncHandler(async (req, res) => {
  * POST /api/matches/analyze
  * Body: { origin_city, destination_city, service_type, cargo_description, cargo_weight, ... }
  */
-export const analyzeQuoteRequest = asyncHandler(async (req, res) => {
+export const analyzeQuoteRequest = asyncHandler(async (req: Request, res: Response) => {
   const {
     origin_city,
     origin_state_province,
@@ -576,10 +675,10 @@ export const analyzeQuoteRequest = asyncHandler(async (req, res) => {
     weight_unit = 'lbs',
     number_of_pieces = 1,
     hazardous_material = false,
-  } = req.body;
+  } = req.body as AnalyzeQuoteBody;
 
   // Build a virtual quote object for analysis
-  const virtualQuote = {
+  const virtualQuote: Partial<Quote> = {
     quote_id: -1, // Virtual quote
     origin_city,
     origin_state_province,
@@ -603,13 +702,13 @@ export const analyzeQuoteRequest = asyncHandler(async (req, res) => {
     });
 
     // Find matches
-    const matches = findEnhancedMatches(virtualQuote, historicalQuotes, {
+    const matches = findEnhancedMatches(virtualQuote as Quote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: 10,
     });
 
     // Generate pricing prompt
-    const pricingPrompt = generatePricingPrompt(virtualQuote, matches);
+    const pricingPrompt = generatePricingPrompt(virtualQuote as Quote, matches);
 
     res.json({
       success: true,
@@ -619,26 +718,35 @@ export const analyzeQuoteRequest = asyncHandler(async (req, res) => {
         route: `${origin_city || 'Unknown'}, ${origin_country} → ${destination_city || 'Unknown'}, ${destination_country}`,
       },
       matchCount: matches.length,
-      topMatches: matches.slice(0, 5).map(m => ({
-        matchedQuoteId: m.matchedQuoteId,
-        similarityScore: m.similarityScore,
-        suggestedPrice: m.suggestedPrice,
-        priceRange: m.priceRange,
-        confidence: m.priceConfidence,
-        matchCriteria: m.matchCriteria,
+      topMatches: matches.slice(0, 5).map((m) => ({
+        matchedQuoteId: m.matched_quote_id,
+        similarityScore: m.similarity_score,
+        suggestedPrice: m.suggested_price,
+        priceRange: m.price_range,
+        confidence: m.price_confidence,
+        matchCriteria: m.match_criteria,
         matchedQuoteData: m.matchedQuoteData,
       })),
       pricingPrompt,
     });
   } catch (error) {
-    throw new DatabaseError('analyzing quote request', error);
+    throw new DatabaseError('analyzing quote request', error as Error);
   }
 });
 
 /**
  * Helper function to process extract-and-match job asynchronously
  */
-async function processExtractAndMatchJob(jobId, jobData) {
+async function processExtractAndMatchJob(
+  jobId: string,
+  jobData: {
+    searchQuery?: string;
+    maxEmails?: number;
+    startDate?: string | null;
+    scoreThreshold?: number;
+    matchingOptions?: MatchingOptions;
+  }
+): Promise<void> {
   try {
     await jobProcessor.updateJob(jobId, {
       status: 'processing',
@@ -654,7 +762,12 @@ async function processExtractAndMatchJob(jobId, jobData) {
       scoreThreshold: jobData.scoreThreshold,
     });
 
-    let matchingResults = { processed: 0, matchesCreated: 0, errors: [], matchDetails: [] };
+    let matchingResults: MatchResult = {
+      processed: 0,
+      matchesCreated: 0,
+      errors: [],
+      matchDetails: [],
+    };
 
     if (extractionResults.newQuoteIds && extractionResults.newQuoteIds.length > 0) {
       const { minScore = 0.45, maxMatches = 10, useAI = true } = jobData.matchingOptions || {};
@@ -669,31 +782,40 @@ async function processExtractAndMatchJob(jobId, jobData) {
         for (const detail of matchingResults.matchDetails) {
           try {
             await recordPricingOutcome(detail.quoteId, {
-              suggestedPrice: detail.suggestedPrice,
-              priceConfidence: detail.aiPricing ?
-                (detail.aiPricing.confidence === 'HIGH' ? 0.9 : detail.aiPricing.confidence === 'MEDIUM' ? 0.7 : 0.5) :
-                (detail.priceRange ? 0.7 : 0.5),
+              suggestedPrice: detail.suggestedPrice ?? undefined,
+              priceConfidence: detail.aiPricing
+                ? detail.aiPricing.confidence === 'HIGH'
+                  ? 0.9
+                  : detail.aiPricing.confidence === 'MEDIUM'
+                    ? 0.7
+                    : 0.5
+                : detail.priceRange
+                  ? 0.7
+                  : 0.5,
               matchCount: detail.matchCount,
               topMatchScore: detail.bestScore,
             });
           } catch (err) {
-            console.log(`  Note: Could not record pricing outcome for quote ${detail.quoteId}: ${err.message}`);
+            console.log(
+              `  Note: Could not record pricing outcome for quote ${detail.quoteId}: ${(err as Error).message}`
+            );
           }
         }
       }
     }
 
     // Periodically trigger learning from feedback
-    const shouldLearn = extractionResults.newQuoteIds &&
-                       extractionResults.newQuoteIds.length > 0 &&
-                       Math.random() < 0.1;
+    const shouldLearn =
+      extractionResults.newQuoteIds &&
+      extractionResults.newQuoteIds.length > 0 &&
+      Math.random() < 0.1;
 
-    let learningResults = null;
+    let learningResults: LearningResult | null = null;
     if (shouldLearn) {
       try {
         learningResults = await learnFromFeedback();
       } catch (err) {
-        console.log(`  Note: Feedback learning skipped: ${err.message}`);
+        console.log(`  Note: Feedback learning skipped: ${(err as Error).message}`);
       }
     }
 
@@ -709,6 +831,7 @@ async function processExtractAndMatchJob(jobId, jobData) {
           lastReceivedDateTime: extractionResults.lastReceivedDateTime,
         },
         matching: {
+          processed: matchingResults.processed,
           quotesProcessed: matchingResults.processed,
           matchesCreated: matchingResults.matchesCreated,
           matchDetails: matchingResults.matchDetails,
@@ -731,8 +854,8 @@ async function processExtractAndMatchJob(jobId, jobData) {
       status: 'failed',
       completedAt: new Date().toISOString(),
       error: {
-        message: error.message,
-        stack: error.stack,
+        message: (error as Error).message,
+        stack: (error as Error).stack,
       },
     });
   }
@@ -746,7 +869,7 @@ async function processExtractAndMatchJob(jobId, jobData) {
  * Trigger feedback learning to update weight adjustments
  * POST /api/matches/learn
  */
-export const triggerLearning = asyncHandler(async (req, res) => {
+export const triggerLearning = asyncHandler(async (req: Request, res: Response) => {
   try {
     const results = await learnFromFeedback();
 
@@ -756,7 +879,7 @@ export const triggerLearning = asyncHandler(async (req, res) => {
       results,
     });
   } catch (error) {
-    throw new DatabaseError('triggering feedback learning', error);
+    throw new DatabaseError('triggering feedback learning', error as Error);
   }
 });
 
@@ -765,9 +888,9 @@ export const triggerLearning = asyncHandler(async (req, res) => {
  * POST /api/matches/pricing-outcome/:quoteId
  * Body: { actualPriceQuoted, actualPriceAccepted, jobWon }
  */
-export const recordOutcome = asyncHandler(async (req, res) => {
+export const recordOutcome = asyncHandler(async (req: Request, res: Response) => {
   const { quoteId } = req.params;
-  const { actualPriceQuoted, actualPriceAccepted, jobWon } = req.body;
+  const { actualPriceQuoted, actualPriceAccepted, jobWon } = req.body as PricingOutcomeBody;
 
   const quoteIdInt = parseInt(quoteId);
   if (isNaN(quoteIdInt)) {
@@ -794,7 +917,7 @@ export const recordOutcome = asyncHandler(async (req, res) => {
       outcome: result,
     });
   } catch (error) {
-    throw new DatabaseError('recording pricing outcome', error);
+    throw new DatabaseError('recording pricing outcome', error as Error);
   }
 });
 
@@ -802,7 +925,7 @@ export const recordOutcome = asyncHandler(async (req, res) => {
  * Get enhanced pricing suggestion with feedback-based adjustments
  * GET /api/matches/smart-pricing/:quoteId
  */
-export const getSmartPricing = asyncHandler(async (req, res) => {
+export const getSmartPricing = asyncHandler(async (req: Request, res: Response) => {
   const { quoteId } = req.params;
 
   const quoteIdInt = parseInt(quoteId);
@@ -842,15 +965,15 @@ export const getSmartPricing = asyncHandler(async (req, res) => {
       },
       smartPricing,
       matchCount: matches.length,
-      topMatches: matches.slice(0, 3).map(m => ({
-        matchedQuoteId: m.matchedQuoteId,
-        score: m.similarityScore,
-        suggestedPrice: m.suggestedPrice,
-        route: `${m.matchedQuoteData.origin} → ${m.matchedQuoteData.destination}`,
+      topMatches: matches.slice(0, 3).map((m) => ({
+        matchedQuoteId: m.matched_quote_id,
+        score: m.similarity_score,
+        suggestedPrice: m.suggested_price,
+        route: `${m.matchedQuoteData?.origin} → ${m.matchedQuoteData?.destination}`,
       })),
     });
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('generating smart pricing', error);
+    throw new DatabaseError('generating smart pricing', error as Error);
   }
 });

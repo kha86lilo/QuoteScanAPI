@@ -1,13 +1,6 @@
 /**
  * AI Prompt Templates for Shipping Quote Processing
- *
- * These prompts are designed for Claude/GPT to extract structured data from emails
- * and suggest pricing based on historical patterns.
  */
-
-// =============================================================================
-// EMAIL PARSING PROMPT - Extract quote details from emails
-// =============================================================================
 
 export const EMAIL_EXTRACTION_PROMPT = `You are an experienced shipping and logistics coordinator at a drayage and transportation company. Your job is to extract quote request details from customer emails.
 
@@ -126,10 +119,6 @@ Return a JSON object with this structure:
 6. Always default country to "USA" if domestic US shipment
 7. Look for container numbers (e.g., MSCU1234567) - they indicate drayage`;
 
-// =============================================================================
-// PRICING RECOMMENDATION PROMPT
-// =============================================================================
-
 export const PRICING_RECOMMENDATION_PROMPT = `You are a senior pricing analyst at a drayage and transportation company with 15+ years of experience. Your role is to provide accurate, competitive quotes that win business while maintaining profitability.
 
 ## YOUR EXPERTISE
@@ -216,10 +205,6 @@ Provide your recommendation in this structure:
 }
 \`\`\``;
 
-// =============================================================================
-// QUOTE COMPARISON PROMPT
-// =============================================================================
-
 export const QUOTE_COMPARISON_PROMPT = `You are analyzing a new quote request against historical similar quotes to provide pricing guidance.
 
 ## ANALYSIS FRAMEWORK
@@ -254,10 +239,6 @@ Given the new request and historical matches:
 2. Adjust for any differences in scope
 3. Apply current market conditions
 4. Provide a data-backed recommendation`;
-
-// =============================================================================
-// RESPONSE EMAIL PROMPT
-// =============================================================================
 
 export const QUOTE_RESPONSE_EMAIL_PROMPT = `You are drafting a professional quote response email for a shipping customer. The email should be:
 
@@ -308,10 +289,6 @@ Please let me know if you have any questions.
 Best regards,
 [Signature]`;
 
-// =============================================================================
-// FOLLOW-UP PROMPT
-// =============================================================================
-
 export const QUOTE_FOLLOWUP_PROMPT = `You are writing a follow-up email for a quote that hasn't received a response.
 
 ## FOLLOW-UP TIMING
@@ -345,38 +322,53 @@ We currently have good capacity for this lane, so let me know if you'd like to p
 Best regards,
 [Name]`;
 
-// =============================================================================
-// HELPER FUNCTION TO SELECT APPROPRIATE PROMPT
-// =============================================================================
+interface PromptContext {
+  historicalMatches?: unknown;
+  quoteDetails?: unknown;
+  followupNumber?: number;
+}
 
-export function getPromptForTask(task, context = {}) {
+type PromptTask =
+  | 'extract_email'
+  | 'recommend_price'
+  | 'compare_quotes'
+  | 'draft_response'
+  | 'draft_followup';
+
+export function getPromptForTask(task: PromptTask, context: PromptContext = {}): string {
   switch (task) {
     case 'extract_email':
       return EMAIL_EXTRACTION_PROMPT;
 
     case 'recommend_price':
-      return PRICING_RECOMMENDATION_PROMPT + (context.historicalMatches ?
-        `\n\n## HISTORICAL MATCHES FOR REFERENCE\n${JSON.stringify(context.historicalMatches, null, 2)}` : '');
+      return (
+        PRICING_RECOMMENDATION_PROMPT +
+        (context.historicalMatches
+          ? `\n\n## HISTORICAL MATCHES FOR REFERENCE\n${JSON.stringify(context.historicalMatches, null, 2)}`
+          : '')
+      );
 
     case 'compare_quotes':
       return QUOTE_COMPARISON_PROMPT;
 
     case 'draft_response':
-      return QUOTE_RESPONSE_EMAIL_PROMPT + (context.quoteDetails ?
-        `\n\n## QUOTE DETAILS TO INCLUDE\n${JSON.stringify(context.quoteDetails, null, 2)}` : '');
+      return (
+        QUOTE_RESPONSE_EMAIL_PROMPT +
+        (context.quoteDetails
+          ? `\n\n## QUOTE DETAILS TO INCLUDE\n${JSON.stringify(context.quoteDetails, null, 2)}`
+          : '')
+      );
 
     case 'draft_followup':
-      return QUOTE_FOLLOWUP_PROMPT + (context.followupNumber ?
-        `\n\n## THIS IS FOLLOW-UP #${context.followupNumber}` : '');
+      return (
+        QUOTE_FOLLOWUP_PROMPT +
+        (context.followupNumber ? `\n\n## THIS IS FOLLOW-UP #${context.followupNumber}` : '')
+      );
 
     default:
       return EMAIL_EXTRACTION_PROMPT;
   }
 }
-
-// =============================================================================
-// VALIDATION RULES FOR EXTRACTED DATA
-// =============================================================================
 
 export const VALIDATION_RULES = {
   required_for_drayage: ['origin_city', 'destination_city', 'service_type'],
@@ -385,19 +377,19 @@ export const VALIDATION_RULES = {
   required_for_pricing: ['origin_city', 'destination_city', 'service_type', 'cargo_weight'],
 
   weight_limits: {
-    'standard_container': 44000, // lbs
-    'overweight_threshold': 44001,
-    'max_legal_weight': 80000, // US legal max
+    standard_container: 44000,
+    overweight_threshold: 44001,
+    max_legal_weight: 80000,
   },
 
   dimension_limits: {
-    'standard_height': 8.5, // feet
-    'overdimensional_height': 8.6,
-    'standard_width': 8.5,
-    'overdimensional_width': 8.6,
-    'max_length_without_permit': 53, // feet
+    standard_height: 8.5,
+    overdimensional_height: 8.6,
+    standard_width: 8.5,
+    overdimensional_width: 8.6,
+    max_length_without_permit: 53,
   },
-};
+} as const;
 
 export default {
   EMAIL_EXTRACTION_PROMPT,

@@ -3,9 +3,29 @@
  * PostgreSQL connection for Supabase
  */
 
-import pkg from 'pg';
-const { Pool } = pkg;
+import pg from 'pg';
+const { Pool } = pg;
 import dotenv from 'dotenv';
+import type {
+  Email,
+  ParsedEmailData,
+  Quote,
+  QuoteWithEmail,
+  Job,
+  JobStatistics,
+  ProcessingStats,
+  ShippingEmail,
+  QuoteMatch,
+  MatchFeedback,
+  FeedbackStatistics,
+  FeedbackByReason,
+  CriteriaPerformance,
+  DatabaseSaveResult,
+  Spammer,
+  MatchCriteria,
+  AIPricingDetails,
+} from '../types/index.js';
+
 dotenv.config();
 
 // Create connection pool
@@ -19,10 +39,10 @@ const pool = new Pool({
     rejectUnauthorized: false,
   },
   max: 20,
-  idleTimeoutMillis: 60000,        // Increased to 60 seconds for longer AI operations
-  connectionTimeoutMillis: 10000,  // Increased to 10 seconds for connection
-  keepAlive: true,                 // Enable TCP keepalive
-  keepAliveInitialDelayMillis: 10000, // Start keepalive after 10 seconds
+  idleTimeoutMillis: 60000,
+  connectionTimeoutMillis: 10000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
 });
 
 // Test connection
@@ -30,10 +50,8 @@ pool.on('connect', () => {
   console.log('✓ Connected to PostgreSQL database');
 });
 
-pool.on('error', (err) => {
-  // Log the error but don't crash - the pool will handle reconnection
+pool.on('error', (err: Error & { code?: string }) => {
   console.error('✗ Database pool error (will attempt reconnection):', err.message);
-  // Only exit on fatal errors that indicate configuration issues
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
     console.error('Fatal database configuration error, shutting down...');
     process.exit(-1);
@@ -42,10 +60,8 @@ pool.on('error', (err) => {
 
 /**
  * Check if email has already been processed
- * @param {string} messageId - Email message ID
- * @returns {Promise<boolean>}
  */
-async function checkEmailExists(messageId) {
+async function checkEmailExists(messageId: string): Promise<boolean> {
   try {
     const result = await pool.query(
       'SELECT COUNT(*) FROM shipping_emails WHERE email_message_id = $1',
@@ -60,31 +76,29 @@ async function checkEmailExists(messageId) {
 
 /**
  * Save parsed quote data to database
- * @param {Object} email - Raw email data from Microsoft Graph
- * @param {Object} parsedData - Parsed data with client_info and quotes array
- * @param {string} jobId - Optional job ID to associate with the email
- * @returns {Promise<Object>} - Database insert result with email_id and quote_ids array
  */
-async function saveQuoteToDatabase(email, parsedData, jobId = null) {
+async function saveQuoteToDatabase(
+  email: Email,
+  parsedData: ParsedEmailData,
+  jobId: string | null = null
+): Promise<DatabaseSaveResult> {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // Validate parsedData structure
     if (!parsedData || !parsedData.quotes || parsedData.quotes.length === 0) {
       throw new Error('No quotes found in parsed data');
     }
 
-    // Step 1: Insert or get existing email record
     const emailQuery = `
       INSERT INTO shipping_emails (
         email_message_id, conversation_id, job_id, email_subject, email_received_date,
         email_sender_name, email_sender_email, email_body_preview,
         email_has_attachments, processed_at, ai_confidence_score
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (email_message_id) 
-      DO UPDATE SET 
+      ON CONFLICT (email_message_id)
+      DO UPDATE SET
         processed_at = EXCLUDED.processed_at,
         ai_confidence_score = EXCLUDED.ai_confidence_score,
         job_id = COALESCE(EXCLUDED.job_id, shipping_emails.job_id),
@@ -109,7 +123,6 @@ async function saveQuoteToDatabase(email, parsedData, jobId = null) {
     const emailResult = await client.query(emailQuery, emailValues);
     const emailId = emailResult.rows[0].email_id;
 
-    // Step 2: Insert all quotes from the email
     const quoteQuery = `
       INSERT INTO shipping_quotes (
         email_id,
@@ -143,13 +156,13 @@ async function saveQuoteToDatabase(email, parsedData, jobId = null) {
       ) RETURNING quote_id
     `;
 
-    const quoteIds = [];
+    const quoteIds: number[] = [];
     const clientInfo = parsedData.client_info || {};
 
-    // Insert each quote
     for (let i = 0; i < parsedData.quotes.length; i++) {
       const quote = parsedData.quotes[i];
-      
+      if (!quote) continue;
+
       const quoteValues = [
         emailId,
         clientInfo.client_company_name,
@@ -227,12 +240,11 @@ async function saveQuoteToDatabase(email, parsedData, jobId = null) {
 
 /**
  * Get statistics about processed emails and quotes
- * @returns {Promise<Object>}
  */
-async function getProcessingStats() {
+async function getProcessingStats(): Promise<ProcessingStats> {
   try {
     const result = await pool.query(`
-      SELECT 
+      SELECT
         COUNT(DISTINCT e.email_id) as total_emails,
         COUNT(q.quote_id) as total_quotes,
         COUNT(CASE WHEN q.quote_status = 'Approved' THEN 1 END) as approved_quotes,
@@ -251,9 +263,8 @@ async function getProcessingStats() {
 
 /**
  * Get the latest lastReceivedDateTime from completed processing jobs
- * @returns {Promise<string|null>} ISO string of last received datetime or null
  */
-async function getLatestLastReceivedDateTime() {
+async function getLatestLastReceivedDateTime(): Promise<string | null> {
   const client = await pool.connect();
   try {
     const result = await client.query(`
@@ -279,15 +290,14 @@ async function getLatestLastReceivedDateTime() {
 
 /**
  * Save job to database
- * @param {Object} job - Job object
  */
-async function saveJobToDatabase(job) {
+async function saveJobToDatabase(job: Job): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query(
       `
       INSERT INTO processing_jobs (
-        job_id, status, created_at, updated_at, started_at, 
+        job_id, status, created_at, updated_at, started_at,
         completed_at, job_data, result, error, progress, last_received_datetime
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `,
@@ -312,10 +322,8 @@ async function saveJobToDatabase(job) {
 
 /**
  * Get job from database
- * @param {string} jobId - Job ID
- * @returns {Object|null} - Job object or null
  */
-async function getJobFromDatabase(jobId) {
+async function getJobFromDatabase(jobId: string): Promise<Job | null> {
   const client = await pool.connect();
   try {
     const result = await client.query('SELECT * FROM processing_jobs WHERE job_id = $1', [jobId]);
@@ -345,15 +353,14 @@ async function getJobFromDatabase(jobId) {
 
 /**
  * Update job in database
- * @param {Object} job - Job object
  */
-async function updateJobInDatabase(job) {
+async function updateJobInDatabase(job: Job): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query(
       `
-      UPDATE processing_jobs 
-      SET status = $2, updated_at = $3, started_at = $4, 
+      UPDATE processing_jobs
+      SET status = $2, updated_at = $3, started_at = $4,
           completed_at = $5, result = $6, error = $7, progress = $8, last_received_datetime = $9
       WHERE job_id = $1
     `,
@@ -374,16 +381,19 @@ async function updateJobInDatabase(job) {
   }
 }
 
+interface JobStatisticsFilters {
+  startDate?: string;
+  endDate?: string;
+}
+
 /**
  * Get job statistics from database
- * @param {Object} filters - Optional filters (e.g., date range, status)
- * @returns {Promise<Object>} - Aggregated statistics
  */
-async function getJobStatistics(filters = {}) {
+async function getJobStatistics(filters: JobStatisticsFilters = {}): Promise<JobStatistics> {
   const client = await pool.connect();
   try {
     let whereClause = '';
-    const params = [];
+    const params: string[] = [];
 
     if (filters.startDate) {
       params.push(filters.startDate);
@@ -399,7 +409,7 @@ async function getJobStatistics(filters = {}) {
 
     const result = await client.query(
       `
-      SELECT 
+      SELECT
         COUNT(*) as total_jobs,
         COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_jobs,
         COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_jobs,
@@ -421,15 +431,13 @@ async function getJobStatistics(filters = {}) {
 
 /**
  * Get emails associated with a processing job
- * @param {string} jobId - Job ID
- * @returns {Promise<Array>} - Array of email objects with quote counts
  */
-async function getEmailsByJobId(jobId) {
+async function getEmailsByJobId(jobId: string): Promise<ShippingEmail[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(
       `
-      SELECT 
+      SELECT
         e.*,
         COUNT(q.quote_id) as quote_count
       FROM shipping_emails e
@@ -449,10 +457,8 @@ async function getEmailsByJobId(jobId) {
 
 /**
  * Get all quotes for a specific email
- * @param {number} emailId - Email ID
- * @returns {Promise<Array>} - Array of quote objects
  */
-async function getQuotesByEmailId(emailId) {
+async function getQuotesByEmailId(emailId: number): Promise<Quote[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -472,15 +478,13 @@ async function getQuotesByEmailId(emailId) {
 
 /**
  * Get email by message ID
- * @param {string} messageId - Email message ID
- * @returns {Promise<Object|null>} - Email object or null
  */
-async function getEmailByMessageId(messageId) {
+async function getEmailByMessageId(messageId: string): Promise<ShippingEmail | null> {
   const client = await pool.connect();
   try {
     const result = await client.query(
       `
-      SELECT 
+      SELECT
         e.*,
         COUNT(q.quote_id) as quote_count
       FROM shipping_emails e
@@ -497,17 +501,19 @@ async function getEmailByMessageId(messageId) {
   }
 }
 
+interface GetAllQuotesResult {
+  quotes: QuoteWithEmail[];
+  totalCount: number;
+}
+
 /**
  * Get all quotes with pagination
- * @param {number} limit - Number of quotes to return
- * @param {number} offset - Number of quotes to skip
- * @returns {Promise<Object>} - Object with quotes array and total count
  */
-async function getAllQuotes(limit = 50, offset = 0) {
+async function getAllQuotes(limit = 50, offset = 0): Promise<GetAllQuotesResult> {
   const client = await pool.connect();
   try {
     const result = await client.query(
-      `SELECT 
+      `SELECT
          q.*,
          e.email_message_id,
          e.email_subject,
@@ -523,7 +529,7 @@ async function getAllQuotes(limit = 50, offset = 0) {
          e.job_id
        FROM shipping_quotes q
        INNER JOIN shipping_emails e ON q.email_id = e.email_id
-       ORDER BY q.created_at DESC 
+       ORDER BY q.created_at DESC
        LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
@@ -542,14 +548,12 @@ async function getAllQuotes(limit = 50, offset = 0) {
 
 /**
  * Get a single quote by ID
- * @param {string} quoteId - Quote ID
- * @returns {Promise<Object|null>} - Quote object or null
  */
-async function getQuoteById(quoteId) {
+async function getQuoteById(quoteId: number | string): Promise<QuoteWithEmail | null> {
   const client = await pool.connect();
   try {
     const result = await client.query(
-      `SELECT 
+      `SELECT
          q.*,
          e.email_message_id,
          e.email_subject,
@@ -575,16 +579,22 @@ async function getQuoteById(quoteId) {
   }
 }
 
+interface SearchCriteria {
+  clientCompanyName?: string;
+  quoteStatus?: string;
+  startDate?: string;
+  endDate?: string;
+  senderEmail?: string;
+}
+
 /**
  * Search quotes by criteria
- * @param {Object} criteria - Search criteria
- * @returns {Promise<Array>} - Array of matching quotes
  */
-async function searchQuotes(criteria) {
+async function searchQuotes(criteria: SearchCriteria): Promise<QuoteWithEmail[]> {
   const { clientCompanyName, quoteStatus, startDate, endDate, senderEmail } = criteria;
 
   let query = `
-    SELECT 
+    SELECT
       q.*,
       e.email_message_id,
       e.email_subject,
@@ -602,7 +612,7 @@ async function searchQuotes(criteria) {
     INNER JOIN shipping_emails e ON q.email_id = e.email_id
     WHERE 1=1
   `;
-  const params = [];
+  const params: string[] = [];
   let paramIndex = 1;
 
   if (clientCompanyName) {
@@ -648,10 +658,8 @@ async function searchQuotes(criteria) {
 
 /**
  * Delete a quote by ID
- * @param {string} quoteId - Quote ID
- * @returns {Promise<boolean>} - True if deleted, false if not found
  */
-async function deleteQuote(quoteId) {
+async function deleteQuote(quoteId: number | string): Promise<boolean> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -666,10 +674,9 @@ async function deleteQuote(quoteId) {
 }
 
 /**
- * Test database connection (simple query)
- * @returns {Promise<boolean>} - True if connection successful
+ * Test database connection
  */
-async function testConnection() {
+async function testConnection(): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query('SELECT 1');
@@ -681,9 +688,8 @@ async function testConnection() {
 
 /**
  * Get current database time
- * @returns {Promise<Date>} - Current database timestamp
  */
-async function getCurrentTime() {
+async function getCurrentTime(): Promise<Date> {
   const client = await pool.connect();
   try {
     const result = await client.query('SELECT NOW() as current_time');
@@ -697,12 +703,21 @@ async function getCurrentTime() {
 // Quote Matches Functions
 // =====================================================
 
+interface CreateMatchData {
+  sourceQuoteId: number;
+  matchedQuoteId: number;
+  similarityScore: number;
+  matchCriteria?: MatchCriteria;
+  suggestedPrice?: number | null;
+  priceConfidence?: number;
+  algorithmVersion?: string;
+  aiPricingDetails?: AIPricingDetails | null;
+}
+
 /**
  * Create a new quote match
- * @param {Object} matchData - Match data
- * @returns {Promise<Object>} - Created match
  */
-async function createQuoteMatch(matchData) {
+async function createQuoteMatch(matchData: CreateMatchData): Promise<QuoteMatch> {
   const client = await pool.connect();
   try {
     const {
@@ -751,15 +766,13 @@ async function createQuoteMatch(matchData) {
 
 /**
  * Create multiple quote matches in bulk
- * @param {Array} matches - Array of match data objects
- * @returns {Promise<Array>} - Created matches
  */
-async function createQuoteMatchesBulk(matches) {
+async function createQuoteMatchesBulk(matches: CreateMatchData[]): Promise<QuoteMatch[]> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const results = [];
+    const results: QuoteMatch[] = [];
     for (const match of matches) {
       const result = await client.query(
         `INSERT INTO quote_matches (
@@ -800,13 +813,18 @@ async function createQuoteMatchesBulk(matches) {
   }
 }
 
+interface GetMatchesOptions {
+  limit?: number;
+  minScore?: number;
+}
+
 /**
  * Get matches for a quote
- * @param {number} quoteId - Source quote ID
- * @param {Object} options - Query options (limit, minScore)
- * @returns {Promise<Array>} - Array of matches with matched quote details
  */
-async function getMatchesForQuote(quoteId, options = {}) {
+async function getMatchesForQuote(
+  quoteId: string | number,
+  options: GetMatchesOptions = {}
+): Promise<QuoteMatch[]> {
   const { limit = 10, minScore = 0 } = options;
   const client = await pool.connect();
   try {
@@ -849,10 +867,8 @@ async function getMatchesForQuote(quoteId, options = {}) {
 
 /**
  * Get a single match by ID
- * @param {number} matchId - Match ID
- * @returns {Promise<Object|null>} - Match object or null
  */
-async function getMatchById(matchId) {
+async function getMatchById(matchId: string | number): Promise<QuoteMatch | null> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -881,10 +897,8 @@ async function getMatchById(matchId) {
 
 /**
  * Delete a match
- * @param {number} matchId - Match ID
- * @returns {Promise<boolean>} - True if deleted
  */
-async function deleteMatch(matchId) {
+async function deleteMatch(matchId: string | number): Promise<boolean> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -901,12 +915,19 @@ async function deleteMatch(matchId) {
 // Quote Match Feedback Functions
 // =====================================================
 
+interface SubmitFeedbackData {
+  matchId: number;
+  userId?: string | null;
+  rating: 1 | -1;
+  feedbackReason?: string | null;
+  feedbackNotes?: string | null;
+  actualPriceUsed?: number | null;
+}
+
 /**
  * Submit feedback for a match
- * @param {Object} feedbackData - Feedback data
- * @returns {Promise<Object>} - Created feedback
  */
-async function submitMatchFeedback(feedbackData) {
+async function submitMatchFeedback(feedbackData: SubmitFeedbackData): Promise<MatchFeedback> {
   const client = await pool.connect();
   try {
     const {
@@ -941,10 +962,8 @@ async function submitMatchFeedback(feedbackData) {
 
 /**
  * Get feedback for a match
- * @param {number} matchId - Match ID
- * @returns {Promise<Array>} - Array of feedback entries
  */
-async function getFeedbackForMatch(matchId) {
+async function getFeedbackForMatch(matchId: string | number): Promise<MatchFeedback[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -959,18 +978,22 @@ async function getFeedbackForMatch(matchId) {
   }
 }
 
+interface FeedbackFilters {
+  algorithmVersion?: string;
+  startDate?: string;
+  endDate?: string;
+}
+
 /**
  * Get feedback statistics for algorithm improvement
- * @param {Object} filters - Optional filters
- * @returns {Promise<Object>} - Aggregated feedback statistics
  */
-async function getFeedbackStatistics(filters = {}) {
+async function getFeedbackStatistics(filters: FeedbackFilters = {}): Promise<FeedbackStatistics> {
   const client = await pool.connect();
   try {
     const { algorithmVersion, startDate, endDate } = filters;
 
     let whereClause = 'WHERE 1=1';
-    const params = [];
+    const params: string[] = [];
     let paramIndex = 1;
 
     if (algorithmVersion) {
@@ -1016,9 +1039,8 @@ async function getFeedbackStatistics(filters = {}) {
 
 /**
  * Get feedback breakdown by reason
- * @returns {Promise<Array>} - Feedback counts by reason
  */
-async function getFeedbackByReason() {
+async function getFeedbackByReason(): Promise<FeedbackByReason[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -1038,10 +1060,9 @@ async function getFeedbackByReason() {
 }
 
 /**
- * Get match criteria performance (which fields correlate with good/bad feedback)
- * @returns {Promise<Object>} - Per-field performance metrics
+ * Get match criteria performance
  */
-async function getMatchCriteriaPerformance() {
+async function getMatchCriteriaPerformance(): Promise<CriteriaPerformance[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -1065,28 +1086,31 @@ async function getMatchCriteriaPerformance() {
   }
 }
 
+interface HistoricalQuotesOptions {
+  limit?: number;
+  onlyWithPrice?: boolean;
+}
+
 /**
- * Get historical quotes for fuzzy matching (excludes given quote IDs)
- * @param {Array<number>} excludeQuoteIds - Quote IDs to exclude from results
- * @param {Object} options - Query options
- * @returns {Promise<Array>} - Historical quotes with relevant fields for matching
+ * Get historical quotes for fuzzy matching
  */
-async function getHistoricalQuotesForMatching(excludeQuoteIds = [], options = {}) {
+async function getHistoricalQuotesForMatching(
+  excludeQuoteIds: number[] = [],
+  options: HistoricalQuotesOptions = {}
+): Promise<Quote[]> {
   const { limit = 500, onlyWithPrice = true } = options;
   const client = await pool.connect();
   try {
     let whereClause = 'WHERE 1=1';
-    const params = [];
+    const params: (number[] | number)[] = [];
     let paramIndex = 1;
 
-    // Exclude specific quote IDs
     if (excludeQuoteIds.length > 0) {
       whereClause += ` AND quote_id != ALL($${paramIndex}::int[])`;
       params.push(excludeQuoteIds);
       paramIndex++;
     }
 
-    // Only include quotes with pricing data (more useful for suggestions)
     if (onlyWithPrice) {
       whereClause += ` AND (final_agreed_price IS NOT NULL OR initial_quote_amount IS NOT NULL)`;
     }
@@ -1137,10 +1161,8 @@ async function getHistoricalQuotesForMatching(excludeQuoteIds = [], options = {}
 
 /**
  * Check if an email address is in the spammers list
- * @param {string} emailAddress - Email address to check
- * @returns {Promise<boolean>} - True if email is a spammer
  */
-async function isSpammer(emailAddress) {
+async function isSpammer(emailAddress: string): Promise<boolean> {
   if (!emailAddress) return false;
   const client = await pool.connect();
   try {
@@ -1156,14 +1178,11 @@ async function isSpammer(emailAddress) {
 
 /**
  * Get all spammers
- * @returns {Promise<Array>} - Array of spammer entries
  */
-async function getAllSpammers() {
+async function getAllSpammers(): Promise<Spammer[]> {
   const client = await pool.connect();
   try {
-    const result = await client.query(
-      'SELECT * FROM spammers ORDER BY created_at DESC'
-    );
+    const result = await client.query('SELECT * FROM spammers ORDER BY created_at DESC');
     return result.rows;
   } finally {
     client.release();
@@ -1172,12 +1191,12 @@ async function getAllSpammers() {
 
 /**
  * Add a spammer to the list
- * @param {string} emailAddress - Email address to block
- * @param {string} reason - Optional reason for blocking
- * @param {string} addedBy - Who added this spammer
- * @returns {Promise<Object>} - Created spammer entry
  */
-async function addSpammer(emailAddress, reason = null, addedBy = null) {
+async function addSpammer(
+  emailAddress: string,
+  reason: string | null = null,
+  addedBy: string | null = null
+): Promise<Spammer> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -1197,10 +1216,8 @@ async function addSpammer(emailAddress, reason = null, addedBy = null) {
 
 /**
  * Remove a spammer from the list
- * @param {string} emailAddress - Email address to unblock
- * @returns {Promise<boolean>} - True if removed
  */
-async function removeSpammer(emailAddress) {
+async function removeSpammer(emailAddress: string): Promise<boolean> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -1215,10 +1232,8 @@ async function removeSpammer(emailAddress) {
 
 /**
  * Get a quote by ID with fields needed for matching
- * @param {number} quoteId - Quote ID
- * @returns {Promise<Object|null>} - Quote object or null
  */
-async function getQuoteForMatching(quoteId) {
+async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -1298,4 +1313,15 @@ export {
   getAllSpammers,
   addSpammer,
   removeSpammer,
+};
+
+export type {
+  JobStatisticsFilters,
+  GetAllQuotesResult,
+  SearchCriteria,
+  CreateMatchData,
+  GetMatchesOptions,
+  SubmitFeedbackData,
+  FeedbackFilters,
+  HistoricalQuotesOptions,
 };

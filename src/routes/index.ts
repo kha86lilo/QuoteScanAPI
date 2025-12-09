@@ -3,14 +3,14 @@
  * Aggregates and exports all route modules
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import emailRoutes from './email.routes.js';
 import quoteRoutes from './quote.routes.js';
 import healthRoutes from './health.routes.js';
 import jobRoutes from './job.routes.js';
 import matchRoutes from './match.routes.js';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Mount routes
 router.use('/emails', emailRoutes);

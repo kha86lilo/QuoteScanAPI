@@ -2,15 +2,15 @@
  * Startup Logger Utility
  */
 
-export const logStartup = (port) => {
+export const logStartup = (port: number | string): void => {
   const separator = '='.repeat(60);
 
   console.log(`\n${separator}`);
-  console.log('🚀 SHIPPING QUOTE EMAIL EXTRACTOR API');
+  console.log('SHIPPING QUOTE EMAIL EXTRACTOR API');
   console.log(separator);
-  console.log(`✓ Server running on port ${port}`);
-  console.log(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`✓ API Base URL: http://localhost:${port}/api`);
+  console.log(`Server running on port ${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`API Base URL: http://localhost:${port}/api`);
   console.log(`${separator}\n`);
 
   console.log('Available endpoints:');
@@ -35,7 +35,7 @@ export const logStartup = (port) => {
   console.log('  GET  /api/test/database             - Test database connection');
   console.log('  GET  /api/test/gemini               - Test Gemini API connection');
 
-  console.log('\n⚡ Rate Limits:');
+  console.log('\nRate Limits:');
   console.log('  - Email Processing: 1 request/minute');
   console.log('  - Status Checks: 30 requests/minute');
   console.log('  - General API: 100 requests/15 min');

@@ -3,10 +3,10 @@
  * Handles quote matching and feedback endpoints
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import * as matchController from '../controllers/match.controller.js';
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // =====================================================
 // Feedback Statistics (must be before /:matchId routes)

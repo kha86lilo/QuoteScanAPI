@@ -1,12 +1,13 @@
 /**
  * AI Service Factory
  * Factory pattern for creating and configuring AI parser services
- * Allows dynamic selection of AI provider based on configuration
  */
 
 import geminiService from './geminiService.js';
 import claudeService from './claudeService.js';
 import chatgptService from './chatgptService.js';
+import type BaseAIService from './BaseAIService.js';
+import type { AIProviderInfo, AIProviderValidation } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -17,17 +18,15 @@ export const AI_PROVIDERS = {
   GEMINI: 'gemini',
   CLAUDE: 'claude',
   CHATGPT: 'chatgpt',
-  OPENAI: 'openai', // Alias for chatgpt
-};
+  OPENAI: 'openai',
+} as const;
+
+export type AIProvider = (typeof AI_PROVIDERS)[keyof typeof AI_PROVIDERS];
 
 /**
  * Get the configured AI service instance
- * @param {string} provider - Optional provider override (gemini, claude, chatgpt)
- * @returns {BaseAIService} AI service instance
- * @throws {Error} If provider is invalid or not configured
  */
-export function getAIService(provider = null) {
-  // Use override or fall back to environment variable
+export function getAIService(provider: string | null = null): BaseAIService {
   const selectedProvider = (
     provider ||
     process.env.AI_PROVIDER ||
@@ -63,10 +62,9 @@ export function getAIService(provider = null) {
 
 /**
  * Get list of available (configured) providers
- * @returns {Array<string>} List of provider names that have API keys configured
  */
-export function getAvailableProviders() {
-  const available = [];
+export function getAvailableProviders(): string[] {
+  const available: string[] = [];
 
   if (process.env.GEMINI_API_KEY) {
     available.push(AI_PROVIDERS.GEMINI);
@@ -83,10 +81,8 @@ export function getAvailableProviders() {
 
 /**
  * Validate configuration for a specific provider
- * @param {string} provider - Provider name
- * @returns {Promise<Object>} Validation result {valid: boolean, message: string}
  */
-export async function validateProvider(provider) {
+export async function validateProvider(provider: string): Promise<AIProviderValidation> {
   try {
     const service = getAIService(provider);
     const isValid = await service.validateApiKey();
@@ -97,21 +93,21 @@ export async function validateProvider(provider) {
       message: isValid ? `${provider} API key is valid` : `${provider} API key is invalid`,
     };
   } catch (error) {
+    const err = error as Error;
     return {
       valid: false,
       provider: provider,
-      message: error.message,
+      message: err.message,
     };
   }
 }
 
 /**
  * Validate all configured providers
- * @returns {Promise<Array>} Array of validation results
  */
-export async function validateAllProviders() {
+export async function validateAllProviders(): Promise<AIProviderValidation[]> {
   const available = getAvailableProviders();
-  const results = [];
+  const results: AIProviderValidation[] = [];
 
   for (const provider of available) {
     const result = await validateProvider(provider);
@@ -123,9 +119,8 @@ export async function validateAllProviders() {
 
 /**
  * Get current AI provider configuration info
- * @returns {Object} Configuration details
  */
-export function getProviderInfo() {
+export function getProviderInfo(): AIProviderInfo {
   const currentProvider = process.env.AI_PROVIDER || AI_PROVIDERS.CHATGPT;
   const available = getAvailableProviders();
 

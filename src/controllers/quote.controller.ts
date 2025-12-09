@@ -3,15 +3,30 @@
  * Handles all quote-related business logic
  */
 
+import type { Request, Response } from 'express';
 import * as db from '../config/db.js';
 import { asyncHandler, NotFoundError, DatabaseError } from '../middleware/errorHandler.js';
+
+interface SearchQuotesBody {
+  clientCompanyName?: string;
+  quoteStatus?: string;
+  startDate?: string;
+  endDate?: string;
+  senderEmail?: string;
+}
+
+interface PaginationQuery {
+  limit?: string;
+  offset?: string;
+}
 
 /**
  * Get all quotes from database
  */
-export const getAllQuotes = asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit) || 50;
-  const offset = parseInt(req.query.offset) || 0;
+export const getAllQuotes = asyncHandler(async (req: Request, res: Response) => {
+  const { limit: limitStr, offset: offsetStr } = req.query as PaginationQuery;
+  const limit = parseInt(limitStr || '50');
+  const offset = parseInt(offsetStr || '0');
 
   try {
     const { quotes, totalCount } = await db.getAllQuotes(limit, offset);
@@ -27,14 +42,14 @@ export const getAllQuotes = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    throw new DatabaseError('fetching quotes', error);
+    throw new DatabaseError('fetching quotes', error as Error);
   }
 });
 
 /**
  * Get a single quote by ID
  */
-export const getQuoteById = asyncHandler(async (req, res) => {
+export const getQuoteById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
@@ -50,15 +65,16 @@ export const getQuoteById = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('fetching quote by ID', error);
+    throw new DatabaseError('fetching quote by ID', error as Error);
   }
 });
 
 /**
  * Search quotes by criteria
  */
-export const searchQuotes = asyncHandler(async (req, res) => {
-  const { clientCompanyName, quoteStatus, startDate, endDate, senderEmail } = req.body;
+export const searchQuotes = asyncHandler(async (req: Request, res: Response) => {
+  const { clientCompanyName, quoteStatus, startDate, endDate, senderEmail } =
+    req.body as SearchQuotesBody;
 
   try {
     const quotes = await db.searchQuotes({
@@ -75,14 +91,14 @@ export const searchQuotes = asyncHandler(async (req, res) => {
       quotes,
     });
   } catch (error) {
-    throw new DatabaseError('searching quotes', error);
+    throw new DatabaseError('searching quotes', error as Error);
   }
 });
 
 /**
  * Delete a quote by ID
  */
-export const deleteQuote = asyncHandler(async (req, res) => {
+export const deleteQuote = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
@@ -98,6 +114,6 @@ export const deleteQuote = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('deleting quote', error);
+    throw new DatabaseError('deleting quote', error as Error);
   }
 });

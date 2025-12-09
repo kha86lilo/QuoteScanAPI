@@ -3,19 +3,19 @@
  * Handles health checks and connection tests
  */
 
+import type { Request, Response } from 'express';
 import * as db from '../config/db.js';
-import * as microsoftGraphService from '../services/mail/microsoftGraphService.js';
-import * as claudeService from '../services/ai/claudeService.js';
-import * as geminiService from '../services/ai/geminiService.js';
-import * as emailExtractor from '../services/mail/emailExtractor.js';
+import microsoftGraphService from '../services/mail/microsoftGraphService.js';
+import claudeService from '../services/ai/claudeService.js';
+import geminiService from '../services/ai/geminiService.js';
+import emailExtractorService from '../services/mail/emailExtractor.js';
 import { asyncHandler, ExternalServiceError, DatabaseError } from '../middleware/errorHandler.js';
 
 /**
  * Health check endpoint
  */
-export const healthCheck = asyncHandler(async (req, res) => {
+export const healthCheck = asyncHandler(async (_req: Request, res: Response) => {
   try {
-    // Check database connection
     await db.testConnection();
 
     res.json({
@@ -27,15 +27,15 @@ export const healthCheck = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    throw new DatabaseError('health check', error);
+    throw new DatabaseError('health check', error as Error);
   }
 });
 
 /**
  * Get processing statistics
  */
-export const getStats = asyncHandler(async (req, res) => {
-  const stats = await emailExtractor.getStats();
+export const getStats = asyncHandler(async (_req: Request, res: Response) => {
+  const stats = await emailExtractorService.getStats();
 
   res.json({
     success: true,
@@ -46,7 +46,7 @@ export const getStats = asyncHandler(async (req, res) => {
 /**
  * Test Microsoft Graph connection
  */
-export const testGraphConnection = asyncHandler(async (req, res) => {
+export const testGraphConnection = asyncHandler(async (_req: Request, res: Response) => {
   try {
     const token = await microsoftGraphService.getAccessToken();
 
@@ -56,14 +56,14 @@ export const testGraphConnection = asyncHandler(async (req, res) => {
       tokenReceived: !!token,
     });
   } catch (error) {
-    throw new ExternalServiceError('Microsoft Graph API', error);
+    throw new ExternalServiceError('Microsoft Graph API', error as Error);
   }
 });
 
 /**
  * Test Claude API connection
  */
-export const testClaudeConnection = asyncHandler(async (req, res) => {
+export const testClaudeConnection = asyncHandler(async (_req: Request, res: Response) => {
   try {
     const isValid = await claudeService.validateApiKey();
 
@@ -72,14 +72,14 @@ export const testClaudeConnection = asyncHandler(async (req, res) => {
       message: isValid ? 'Claude API connection successful' : 'Claude API connection failed',
     });
   } catch (error) {
-    throw new ExternalServiceError('Claude API', error);
+    throw new ExternalServiceError('Claude API', error as Error);
   }
 });
 
 /**
  * Test Gemini API connection
  */
-export const testGeminiConnection = asyncHandler(async (req, res) => {
+export const testGeminiConnection = asyncHandler(async (_req: Request, res: Response) => {
   try {
     const isValid = await geminiService.validateApiKey();
     res.json({
@@ -87,14 +87,14 @@ export const testGeminiConnection = asyncHandler(async (req, res) => {
       message: isValid ? 'Gemini API connection successful' : 'Gemini API connection failed',
     });
   } catch (error) {
-    throw new ExternalServiceError('Gemini API', error);
+    throw new ExternalServiceError('Gemini API', error as Error);
   }
 });
 
 /**
  * Test database connection
  */
-export const testDatabaseConnection = asyncHandler(async (req, res) => {
+export const testDatabaseConnection = asyncHandler(async (_req: Request, res: Response) => {
   try {
     const currentTime = await db.getCurrentTime();
 
@@ -104,6 +104,6 @@ export const testDatabaseConnection = asyncHandler(async (req, res) => {
       currentTime,
     });
   } catch (error) {
-    throw new DatabaseError('testing connection', error);
+    throw new DatabaseError('testing connection', error as Error);
   }
 });
