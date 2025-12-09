@@ -4,6 +4,7 @@
  */
 
 import * as db from '../config/db.js';
+import type { QuoteFeedbackData } from '../config/db.js';
 import { getAIService } from './ai/aiServiceFactory.js';
 import type {
   Quote,
@@ -459,15 +460,66 @@ interface MatchingOptions {
   minScore?: number;
   maxMatches?: number;
   useAI?: boolean;
+  feedbackData?: Map<number, QuoteFeedbackData>;
 }
+
+// Feedback boost constants
+const FEEDBACK_BOOST = {
+  // Boost for having positive feedback
+  POSITIVE_FEEDBACK_BASE: 0.05,  // Base boost for having any positive feedback
+  POSITIVE_FEEDBACK_PER_COUNT: 0.02,  // Additional boost per positive feedback (capped)
+  POSITIVE_FEEDBACK_MAX_BOOST: 0.15,  // Maximum boost from positive feedback
+  // Penalty for negative feedback
+  NEGATIVE_FEEDBACK_PENALTY: 0.03,  // Penalty per negative feedback
+  NEGATIVE_FEEDBACK_MAX_PENALTY: 0.10,  // Maximum penalty from negative feedback
+  // Boost for verified pricing
+  VERIFIED_PRICE_BOOST: 0.08,  // Boost when actual_price_used matches suggested price
+};
 
 interface ExtendedQuoteMatch extends QuoteMatch {
   sourceQuoteId: number;
   matchedQuoteId: number;
+  feedbackData?: QuoteFeedbackData;
+  feedbackBoost?: number;
+}
+
+/**
+ * Calculate feedback boost/penalty for a historical quote
+ */
+function calculateFeedbackBoost(feedbackData: QuoteFeedbackData | undefined): number {
+  if (!feedbackData || feedbackData.total_feedback_count === 0) {
+    return 0;
+  }
+
+  let boost = 0;
+
+  // Positive feedback boost
+  if (feedbackData.positive_feedback_count > 0) {
+    boost += FEEDBACK_BOOST.POSITIVE_FEEDBACK_BASE;
+    boost += Math.min(
+      feedbackData.positive_feedback_count * FEEDBACK_BOOST.POSITIVE_FEEDBACK_PER_COUNT,
+      FEEDBACK_BOOST.POSITIVE_FEEDBACK_MAX_BOOST - FEEDBACK_BOOST.POSITIVE_FEEDBACK_BASE
+    );
+  }
+
+  // Negative feedback penalty
+  if (feedbackData.negative_feedback_count > 0) {
+    boost -= Math.min(
+      feedbackData.negative_feedback_count * FEEDBACK_BOOST.NEGATIVE_FEEDBACK_PENALTY,
+      FEEDBACK_BOOST.NEGATIVE_FEEDBACK_MAX_PENALTY
+    );
+  }
+
+  // Verified pricing boost - if actual prices were used and recorded
+  if (feedbackData.actual_prices_used && feedbackData.actual_prices_used.length > 0) {
+    boost += FEEDBACK_BOOST.VERIFIED_PRICE_BOOST;
+  }
+
+  return boost;
 }
 
 function findEnhancedMatches(sourceQuote: Quote, historicalQuotes: Quote[], options: MatchingOptions = {}): ExtendedQuoteMatch[] {
-  const { minScore = 0.45, maxMatches = 10 } = options;
+  const { minScore = 0.45, maxMatches = 10, feedbackData } = options;
 
   const matches: ExtendedQuoteMatch[] = [];
 
@@ -476,22 +528,44 @@ function findEnhancedMatches(sourceQuote: Quote, historicalQuotes: Quote[], opti
 
     const { score, criteria, metadata } = calculateEnhancedSimilarity(sourceQuote, historical);
 
-    if (score >= minScore) {
-      const priceInfo = suggestPriceEnhanced(historical, score, sourceQuote);
+    // Get feedback data for this historical quote
+    const quoteFeedback = feedbackData?.get(historical.quote_id!);
+    const feedbackBoost = calculateFeedbackBoost(quoteFeedback);
+
+    // Apply feedback boost to the score (capped at 1.0)
+    const adjustedScore = Math.min(1.0, score + feedbackBoost);
+
+    if (adjustedScore >= minScore) {
+      const priceInfo = suggestPriceEnhanced(historical, adjustedScore, sourceQuote);
+
+      // Adjust price confidence based on feedback
+      let adjustedPriceConfidence = priceInfo.priceConfidence;
+      if (quoteFeedback) {
+        // Increase confidence if we have positive feedback
+        if (quoteFeedback.positive_feedback_count > quoteFeedback.negative_feedback_count) {
+          adjustedPriceConfidence = Math.min(1.0, adjustedPriceConfidence + 0.1);
+        }
+        // Increase confidence further if we have verified actual prices
+        if (quoteFeedback.actual_prices_used && quoteFeedback.actual_prices_used.length > 0) {
+          adjustedPriceConfidence = Math.min(1.0, adjustedPriceConfidence + 0.1);
+        }
+      }
 
       matches.push({
         source_quote_id: sourceQuote.quote_id!,
         matched_quote_id: historical.quote_id!,
         sourceQuoteId: sourceQuote.quote_id!,
         matchedQuoteId: historical.quote_id!,
-        similarity_score: score,
+        similarity_score: adjustedScore,
         match_criteria: criteria,
         suggested_price: priceInfo.suggestedPrice,
-        price_confidence: priceInfo.priceConfidence,
+        price_confidence: adjustedPriceConfidence,
         price_range: priceInfo.priceRange,
         priceSource: priceInfo.priceSource,
         jobWon: priceInfo.jobWon,
         metadata,
+        feedbackData: quoteFeedback,
+        feedbackBoost: feedbackBoost,
         matchedQuoteData: {
           origin: `${historical.origin_city || 'Unknown'}, ${historical.origin_country || 'Unknown'}`,
           destination: `${historical.destination_city || 'Unknown'}, ${historical.destination_country || 'Unknown'}`,
@@ -569,6 +643,11 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
       return results;
     }
 
+    // Get feedback data for all historical quotes to boost matches with positive feedback
+    const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
+    const feedbackData = await db.getFeedbackForHistoricalQuotes(historicalQuoteIds);
+    console.log(`Loaded feedback data for ${feedbackData.size} historical quotes`);
+
     for (const quoteId of newQuoteIds) {
       try {
         const sourceQuote = await db.getQuoteForMatching(quoteId);
@@ -582,7 +661,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
         console.log(`    Service: ${sourceQuote.service_type || 'Unknown'}`);
         console.log(`    Cargo: ${(sourceQuote.cargo_description || 'Unknown').substring(0, 50)}...`);
 
-        const matches = findEnhancedMatches(sourceQuote, historicalQuotes, { minScore, maxMatches });
+        const matches = findEnhancedMatches(sourceQuote, historicalQuotes, { minScore, maxMatches, feedbackData });
 
         if (matches.length > 0) {
           let aiPricing: AIPricingDetails | null = null;
@@ -892,9 +971,60 @@ async function suggestPriceWithFeedback(sourceQuote: Quote, matches: ExtendedQuo
 }
 
 /**
+ * Generate feedback summary for a match
+ */
+function generateFeedbackSummary(feedbackData: QuoteFeedbackData | undefined): string {
+  if (!feedbackData || feedbackData.total_feedback_count === 0) {
+    return '- Feedback: No feedback yet';
+  }
+
+  const parts: string[] = [];
+
+  // Rating summary
+  const thumbsUp = feedbackData.positive_feedback_count;
+  const thumbsDown = feedbackData.negative_feedback_count;
+  parts.push(`- Feedback: ${thumbsUp} 👍 / ${thumbsDown} 👎`);
+
+  // Feedback reasons
+  if (feedbackData.feedback_reasons && feedbackData.feedback_reasons.length > 0) {
+    const reasonsStr = feedbackData.feedback_reasons
+      .filter(r => r) // Filter out nulls
+      .map(r => r.replace(/_/g, ' '))
+      .join(', ');
+    if (reasonsStr) {
+      parts.push(`- Feedback Reasons: ${reasonsStr}`);
+    }
+  }
+
+  // Actual prices used (valuable for pricing accuracy)
+  if (feedbackData.actual_prices_used && feedbackData.actual_prices_used.length > 0) {
+    const avgActualPrice = feedbackData.actual_prices_used.reduce((a, b) => a + b, 0) / feedbackData.actual_prices_used.length;
+    parts.push(`- Verified Actual Price: $${Math.round(avgActualPrice).toLocaleString()} (from ${feedbackData.actual_prices_used.length} feedback${feedbackData.actual_prices_used.length > 1 ? 's' : ''})`);
+  }
+
+  // User notes (limit to avoid prompt bloat)
+  if (feedbackData.feedback_notes && feedbackData.feedback_notes.length > 0) {
+    const notes = feedbackData.feedback_notes
+      .filter(n => n && n.trim())
+      .slice(0, 2) // Only include up to 2 notes
+      .map(n => `"${n.substring(0, 100)}${n.length > 100 ? '...' : ''}"`)
+      .join('; ');
+    if (notes) {
+      parts.push(`- User Notes: ${notes}`);
+    }
+  }
+
+  return parts.join('\n');
+}
+
+/**
  * Generate pricing recommendation prompt for AI
  */
 function generatePricingPrompt(sourceQuote: Quote, topMatches: ExtendedQuoteMatch[]): string {
+  // Calculate feedback summary stats
+  const matchesWithFeedback = topMatches.filter(m => m.feedbackData && m.feedbackData.total_feedback_count > 0);
+  const matchesWithVerifiedPrices = topMatches.filter(m => m.feedbackData?.actual_prices_used && m.feedbackData.actual_prices_used.length > 0);
+
   const prompt = `You are an experienced shipping and transportation pricing specialist. Based on the following quote request and historical similar quotes, provide a pricing recommendation.
 
 ## NEW QUOTE REQUEST
@@ -907,8 +1037,12 @@ function generatePricingPrompt(sourceQuote: Quote, topMatches: ExtendedQuoteMatc
 - **Container Type**: ${detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type) || 'Standard/Not specified'}
 
 ## SIMILAR HISTORICAL QUOTES
-${topMatches.slice(0, 5).map((m, i) => `
-### Match ${i + 1} (${(m.similarity_score * 100).toFixed(0)}% similar)
+${topMatches.slice(0, 5).map((m, i) => {
+  const feedbackBoostStr = m.feedbackBoost && m.feedbackBoost !== 0
+    ? ` (${m.feedbackBoost > 0 ? '+' : ''}${(m.feedbackBoost * 100).toFixed(0)}% feedback adjustment)`
+    : '';
+  return `
+### Match ${i + 1} (${(m.similarity_score * 100).toFixed(0)}% similar${feedbackBoostStr})
 - Route: ${m.matchedQuoteData?.origin} → ${m.matchedQuoteData?.destination}
 - Service: ${m.matchedQuoteData?.service}
 - Cargo: ${m.matchedQuoteData?.cargo || 'Not specified'}
@@ -916,13 +1050,23 @@ ${topMatches.slice(0, 5).map((m, i) => `
 - Final Agreed Price: $${m.matchedQuoteData?.finalPrice?.toLocaleString() || 'N/A'}
 - Date: ${m.matchedQuoteData?.quoteDate ? new Date(m.matchedQuoteData.quoteDate).toLocaleDateString() : 'N/A'}
 - Status: ${m.matchedQuoteData?.status || 'Unknown'}
-`).join('\n')}
+${generateFeedbackSummary(m.feedbackData)}
+`;
+}).join('\n')}
+${matchesWithFeedback.length > 0 ? `
+## FEEDBACK INSIGHTS
+- **Matches with User Feedback**: ${matchesWithFeedback.length} of ${topMatches.slice(0, 5).length}
+- **Matches with Verified Actual Prices**: ${matchesWithVerifiedPrices.length}
+${matchesWithVerifiedPrices.length > 0 ? `
+**IMPORTANT**: Matches with verified actual prices should be weighted more heavily in your recommendation as these represent real-world pricing that was accepted by customers.
+` : ''}` : ''}
 
 ## YOUR TASK
 1. Analyze the route, cargo, and service type
 2. Consider current market conditions (fuel costs, capacity)
 3. Note any special requirements (hazmat, oversized, time-sensitive)
-4. Provide a recommended price range
+4. **Pay special attention to matches with positive feedback and verified actual prices** - these are more reliable
+5. Provide a recommended price range
 
 Respond with:
 - **Recommended Price**: $X,XXX - $X,XXX

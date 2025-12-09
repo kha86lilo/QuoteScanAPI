@@ -5,6 +5,7 @@
 
 import type { Request, Response } from 'express';
 import * as db from '../config/db.js';
+import { getFeedbackForHistoricalQuotes } from '../config/db.js';
 import {
   asyncHandler,
   NotFoundError,
@@ -589,13 +590,18 @@ export const getPricingSuggestion = asyncHandler(async (req: Request, res: Respo
       onlyWithPrice: true,
     });
 
-    // Find enhanced matches
+    // Get feedback data for historical quotes to boost matches with positive feedback
+    const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
+    const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
+
+    // Find enhanced matches with feedback data
     const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: limit,
+      feedbackData,
     });
 
-    // Generate pricing prompt
+    // Generate pricing prompt (now includes feedback details)
     const pricingPrompt = generatePricingPrompt(sourceQuote, matches);
 
     // Calculate aggregate suggested price
@@ -701,13 +707,18 @@ export const analyzeQuoteRequest = asyncHandler(async (req: Request, res: Respon
       onlyWithPrice: true,
     });
 
-    // Find matches
+    // Get feedback data for historical quotes
+    const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
+    const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
+
+    // Find matches with feedback data
     const matches = findEnhancedMatches(virtualQuote as Quote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: 10,
+      feedbackData,
     });
 
-    // Generate pricing prompt
+    // Generate pricing prompt (now includes feedback details)
     const pricingPrompt = generatePricingPrompt(virtualQuote as Quote, matches);
 
     res.json({
@@ -726,6 +737,8 @@ export const analyzeQuoteRequest = asyncHandler(async (req: Request, res: Respon
         confidence: m.price_confidence,
         matchCriteria: m.match_criteria,
         matchedQuoteData: m.matchedQuoteData,
+        feedbackBoost: m.feedbackBoost,
+        hasFeedback: m.feedbackData ? m.feedbackData.total_feedback_count > 0 : false,
       })),
       pricingPrompt,
     });
@@ -946,10 +959,15 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
       onlyWithPrice: true,
     });
 
-    // Find enhanced matches
+    // Get feedback data for historical quotes
+    const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
+    const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
+
+    // Find enhanced matches with feedback data
     const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: 10,
+      feedbackData,
     });
 
     // Get smart pricing with feedback adjustments
@@ -970,6 +988,8 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
         score: m.similarity_score,
         suggestedPrice: m.suggested_price,
         route: `${m.matchedQuoteData?.origin} → ${m.matchedQuoteData?.destination}`,
+        feedbackBoost: m.feedbackBoost,
+        hasFeedback: m.feedbackData ? m.feedbackData.total_feedback_count > 0 : false,
       })),
     });
   } catch (error) {

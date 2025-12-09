@@ -1231,6 +1231,67 @@ async function removeSpammer(emailAddress: string): Promise<boolean> {
 }
 
 /**
+ * Feedback data associated with a historical quote
+ */
+interface QuoteFeedbackData {
+  quote_id: number;
+  total_feedback_count: number;
+  positive_feedback_count: number;
+  negative_feedback_count: number;
+  avg_rating: number | null;
+  feedback_reasons: string[];
+  feedback_notes: string[];
+  actual_prices_used: number[];
+}
+
+/**
+ * Get feedback data for historical quotes used in matching
+ * This queries the quote_matches_with_feedback view and quote_match_feedback table
+ */
+async function getFeedbackForHistoricalQuotes(quoteIds: number[]): Promise<Map<number, QuoteFeedbackData>> {
+  if (quoteIds.length === 0) return new Map();
+
+  const client = await pool.connect();
+  try {
+    // Get aggregated feedback for quotes that have been matched against
+    const result = await client.query(
+      `SELECT
+        m.matched_quote_id as quote_id,
+        COUNT(f.feedback_id) as total_feedback_count,
+        COUNT(CASE WHEN f.rating = 1 THEN 1 END) as positive_feedback_count,
+        COUNT(CASE WHEN f.rating = -1 THEN 1 END) as negative_feedback_count,
+        AVG(f.rating) as avg_rating,
+        ARRAY_AGG(DISTINCT f.feedback_reason) FILTER (WHERE f.feedback_reason IS NOT NULL) as feedback_reasons,
+        ARRAY_AGG(f.feedback_notes) FILTER (WHERE f.feedback_notes IS NOT NULL) as feedback_notes,
+        ARRAY_AGG(f.actual_price_used) FILTER (WHERE f.actual_price_used IS NOT NULL) as actual_prices_used
+      FROM quote_matches m
+      INNER JOIN quote_match_feedback f ON m.match_id = f.match_id
+      WHERE m.matched_quote_id = ANY($1::int[])
+      GROUP BY m.matched_quote_id`,
+      [quoteIds]
+    );
+
+    const feedbackMap = new Map<number, QuoteFeedbackData>();
+    for (const row of result.rows) {
+      feedbackMap.set(row.quote_id, {
+        quote_id: row.quote_id,
+        total_feedback_count: parseInt(row.total_feedback_count) || 0,
+        positive_feedback_count: parseInt(row.positive_feedback_count) || 0,
+        negative_feedback_count: parseInt(row.negative_feedback_count) || 0,
+        avg_rating: row.avg_rating ? parseFloat(row.avg_rating) : null,
+        feedback_reasons: row.feedback_reasons || [],
+        feedback_notes: row.feedback_notes || [],
+        actual_prices_used: row.actual_prices_used || [],
+      });
+    }
+
+    return feedbackMap;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Get a quote by ID with fields needed for matching
  */
 async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
@@ -1308,6 +1369,7 @@ export {
   // Historical quotes for matching
   getHistoricalQuotesForMatching,
   getQuoteForMatching,
+  getFeedbackForHistoricalQuotes,
   // Spammers
   isSpammer,
   getAllSpammers,
@@ -1324,4 +1386,5 @@ export type {
   SubmitFeedbackData,
   FeedbackFilters,
   HistoricalQuotesOptions,
+  QuoteFeedbackData,
 };
