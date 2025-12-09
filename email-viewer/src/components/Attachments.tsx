@@ -32,11 +32,19 @@ function getFileExtension(filename: string): string {
   return parts.length > 1 ? parts.pop()?.toUpperCase() || '' : '';
 }
 
+function shouldHideAttachment(attachment: EmailAttachment): boolean {
+  const isImage = attachment.contentType.startsWith('image/');
+  const isSmall = attachment.size < 25000; // 25KB threshold
+  // Hide small images OR inline images (likely signatures/logos)
+  return isImage && isSmall && attachment.isInline;
+}
+
 export default function Attachments({ emailId, hasAttachments }: AttachmentsProps) {
   const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (hasAttachments && isExpanded && attachments.length === 0) {
@@ -59,6 +67,29 @@ export default function Attachments({ emailId, hasAttachments }: AttachmentsProp
     }
   };
 
+  const downloadAttachment = async (attachment: EmailAttachment) => {
+    setDownloadingId(attachment.id);
+    try {
+      const response = await fetch(`/api/emails/${emailId}/attachments/${attachment.id}`);
+      if (!response.ok) throw new Error('Failed to download attachment');
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = attachment.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+      alert('Failed to download attachment');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   if (!hasAttachments) {
     return null;
   }
@@ -72,9 +103,9 @@ export default function Attachments({ emailId, hasAttachments }: AttachmentsProp
         <div className="flex items-center gap-2">
           <Paperclip className="w-4 h-4 text-outlook-textLight" />
           <span className="text-sm font-medium text-outlook-text">Attachments</span>
-          {attachments.length > 0 && (
+          {attachments.filter(a => !shouldHideAttachment(a)).length > 0 && (
             <span className="px-2 py-0.5 bg-outlook-lightBlue text-outlook-blue text-xs rounded-full">
-              {attachments.length}
+              {attachments.filter(a => !shouldHideAttachment(a)).length}
             </span>
           )}
         </div>
@@ -105,11 +136,11 @@ export default function Attachments({ emailId, hasAttachments }: AttachmentsProp
                 Try again
               </button>
             </div>
-          ) : attachments.length === 0 ? (
+          ) : attachments.filter(a => !shouldHideAttachment(a)).length === 0 ? (
             <p className="text-sm text-outlook-textLight py-2">No attachments found</p>
           ) : (
             <div className="grid gap-2">
-              {attachments.map((attachment) => (
+              {attachments.filter(a => !shouldHideAttachment(a)).map((attachment) => (
                 <div
                   key={attachment.id}
                   className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-outlook-hover transition-colors group"
@@ -135,10 +166,16 @@ export default function Attachments({ emailId, hasAttachments }: AttachmentsProp
                     </div>
                   </div>
                   <button
-                    className="flex-shrink-0 p-2 opacity-0 group-hover:opacity-100 hover:bg-white rounded-lg transition-all"
+                    onClick={() => downloadAttachment(attachment)}
+                    disabled={downloadingId === attachment.id}
+                    className="flex-shrink-0 p-2 opacity-0 group-hover:opacity-100 hover:bg-white rounded-lg transition-all disabled:opacity-100"
                     title="Download attachment"
                   >
-                    <Download className="w-4 h-4 text-outlook-blue" />
+                    {downloadingId === attachment.id ? (
+                      <Loader2 className="w-4 h-4 text-outlook-blue animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 text-outlook-blue" />
+                    )}
                   </button>
                 </div>
               ))}
