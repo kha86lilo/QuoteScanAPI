@@ -152,6 +152,23 @@ export const PRICING_RECOMMENDATION_PROMPT = `You are a senior pricing analyst a
 - Terminal handling charges ($150-400 per container)
 - Documentation fees ($75-150)
 
+### Out of Gauge (OOG) / Specialty Container Pricing
+**CRITICAL**: OOG cargo requires significant pricing premiums:
+- **Open Top (OT) containers**: +35-45% premium over standard containers
+  - Limited availability increases rates
+  - Requires specialized loading/unloading equipment
+  - May require top-loading crane access at origin/destination
+- **Flat Rack containers**: +50-100% premium
+- **Overheight cargo (>8.5ft / 102in)**: Requires permits, add $200-500+ per state
+- **Overwidth cargo (>8.5ft)**: Requires escort vehicles, add $300-800+ per state
+- **OOG Ground Transport**: Use flatbed or step-deck trailers
+  - Step-deck premium: +15-25% over standard dry van
+  - Flatbed premium: +10-20% over standard dry van
+  - Permit costs vary by state ($50-300 per permit)
+- **IMPORTANT**: When cargo description mentions "OOG", "out of gauge", "OT", "open top", "40 OT":
+  Apply minimum 1.35-1.45x multiplier to base container/transport rates
+- **Real-world example**: Miami to Orlando OOG cargo on step-deck was priced at $3,850 vs standard estimate of $2,750 (40% premium)
+
 ### Transloading
 - Handling rate ($0.08-0.25 per lb or $150-400 per pallet)
 - Storage costs ($15-40 per pallet/month)

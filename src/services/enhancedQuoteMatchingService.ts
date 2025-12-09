@@ -211,15 +211,67 @@ function detectContainerType(description: string | null | undefined, serviceType
 
   const text = `${description || ''} ${serviceType || ''}`.toLowerCase();
 
-  if (text.includes('flat rack') || text.includes('flatrack') || text.includes('fr')) return 'FLAT_RACK';
-  if (text.includes('open top') || text.includes('ot')) return 'OPEN_TOP';
+  // Check reefer first (before flat rack, since "refrigerated" contains "fr")
   if (text.includes('reefer') || text.includes('refrigerated')) return 'REEFER';
+  // Flat rack - use word boundary to avoid matching "freight", "free", etc.
+  if (text.includes('flat rack') || text.includes('flatrack') || text.match(/\bfr\b/)) return 'FLAT_RACK';
+  // Enhanced OOG/Open Top detection - learned from quote 10726 feedback: "40 OT (OOG)" should be OPEN_TOP
+  if (text.includes('open top') || text.includes('open-top') || text.match(/\b40\s*ot\b/) || text.match(/\boog\b/) ||
+      text.includes('out of gauge') || text.match(/\bot\b.*container/) ||
+      text.includes('top loaded') || text.includes('top-loaded')) return 'OPEN_TOP';
   if (text.includes('40') && text.includes('hc')) return '40HC';
   if (text.includes('40')) return '40STD';
   if (text.includes('20')) return '20STD';
   if (text.includes('roro') || text.includes('ro-ro')) return 'RORO';
 
   return null;
+}
+
+// OOG/Specialty container pricing multipliers based on feedback learning
+// Updated based on feedback from quote 10726: OOG cargo priced 40% higher than standard
+const CONTAINER_PRICING_MULTIPLIERS: Record<string, number> = {
+  'OPEN_TOP': 1.40,      // +35-45% premium - learned from quote 10726 feedback ($2750 -> $3850)
+  'FLAT_RACK': 1.75,     // +50-100% premium
+  'REEFER': 1.40,        // +30-50% premium
+  '40HC': 1.05,          // Small premium for high cube
+  '40STD': 1.00,
+  '20STD': 1.00,
+  'RORO': 1.20,          // +15-25% premium
+};
+
+/**
+ * Check if cargo is OOG (Out of Gauge) based on description and dimensions
+ */
+function isOOGCargo(description: string | null | undefined, height: number | string | null | undefined, width: number | string | null | undefined): boolean {
+  const text = (description || '').toLowerCase();
+
+  // Check description for OOG indicators
+  if (text.match(/\boog\b/) || text.includes('out of gauge') || text.includes('oversized') ||
+      text.includes('overdimensional') || text.includes('overheight') || text.includes('overwidth') ||
+      text.match(/\b40\s*ot\b/) || text.includes('open top') || text.includes('open-top') ||
+      text.includes('top loaded') || text.includes('top-loaded')) {
+    return true;
+  }
+
+  // Check dimensions (standard max height is 8.5ft/102in, max width is 8.5ft/102in)
+  const heightNum = typeof height === 'string' ? parseFloat(height) : height;
+  const widthNum = typeof width === 'string' ? parseFloat(width) : width;
+  if (heightNum && heightNum > 102) return true;  // Assuming inches
+  if (widthNum && widthNum > 102) return true;    // Assuming inches
+
+  return false;
+}
+
+/**
+ * Get pricing multiplier based on container type and OOG status
+ */
+function getContainerPricingMultiplier(containerType: string | null, isOOG: boolean): number {
+  if (isOOG) {
+    // OOG cargo always gets the Open Top premium at minimum
+    return Math.max(CONTAINER_PRICING_MULTIPLIERS['OPEN_TOP'] || 1.40,
+                   containerType ? CONTAINER_PRICING_MULTIPLIERS[containerType] || 1.0 : 1.0);
+  }
+  return containerType ? CONTAINER_PRICING_MULTIPLIERS[containerType] || 1.0 : 1.0;
 }
 
 function jaroWinklerSimilarity(s1: string | null | undefined, s2: string | null | undefined): number {
@@ -422,7 +474,7 @@ interface PriceSuggestion {
   jobWon?: boolean | null;
 }
 
-function suggestPriceEnhanced(historicalQuote: Quote, similarityScore: number, _sourceQuote: Quote): PriceSuggestion {
+function suggestPriceEnhanced(historicalQuote: Quote, similarityScore: number, sourceQuote: Quote): PriceSuggestion {
   const price = historicalQuote.final_agreed_price || historicalQuote.initial_quote_amount;
   if (!price || price <= 0) return { suggestedPrice: null, priceConfidence: 0, priceRange: null };
 
@@ -441,8 +493,25 @@ function suggestPriceEnhanced(historicalQuote: Quote, similarityScore: number, _
     if (ageDays > 365) baseConfidence -= 0.15;
   }
 
+  // Apply OOG/Container type pricing multiplier based on source quote characteristics
+  const sourceContainerType = detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type);
+  const histContainerType = detectContainerType(historicalQuote.cargo_description, historicalQuote.service_type);
+  const sourceIsOOG = isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width);
+  const histIsOOG = isOOGCargo(historicalQuote.cargo_description, historicalQuote.cargo_height, historicalQuote.cargo_width);
+
+  // Calculate multiplier adjustment if source is OOG but historical is not
+  let pricingMultiplier = 1.0;
+  if (sourceIsOOG && !histIsOOG) {
+    // Source quote is OOG but historical match is not - apply OOG premium
+    pricingMultiplier = getContainerPricingMultiplier(sourceContainerType, sourceIsOOG);
+  } else if (sourceContainerType && !histContainerType) {
+    // Source has specialty container but historical doesn't - apply container premium
+    pricingMultiplier = CONTAINER_PRICING_MULTIPLIERS[sourceContainerType] || 1.0;
+  }
+
   const priceVariance = (1 - Math.min(1, baseConfidence)) * 0.25;
-  const suggestedPrice = parseFloat(String(price));
+  const basePrice = parseFloat(String(price));
+  const suggestedPrice = Math.round(basePrice * pricingMultiplier);
 
   return {
     suggestedPrice,
@@ -1035,7 +1104,15 @@ function generatePricingPrompt(sourceQuote: Quote, topMatches: ExtendedQuoteMatc
 - **Pieces**: ${sourceQuote.number_of_pieces || 'Not specified'}
 - **Hazmat**: ${sourceQuote.hazardous_material ? 'Yes' : 'No'}
 - **Container Type**: ${detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type) || 'Standard/Not specified'}
-
+- **OOG (Out of Gauge)**: ${isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width) ? 'YES - Apply 1.35-1.45x pricing multiplier' : 'No'}
+${isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width) ? `
+**IMPORTANT OOG PRICING NOTE**: This cargo is Out of Gauge (OOG). Based on learned feedback:
+- Open Top containers command +35-45% premium over standard containers
+- OOG ground transport requires flatbed/step-deck trailers (+15-25% premium)
+- State permits may be required ($50-300+ per state)
+- Apply minimum 1.35-1.45x multiplier to base rates
+- Real example: Miami-Orlando OOG was priced at $3,850 vs $2,750 standard (40% premium)
+` : ''}
 ## SIMILAR HISTORICAL QUOTES
 ${topMatches.slice(0, 5).map((m, i) => {
   const feedbackBoostStr = m.feedbackBoost && m.feedbackBoost !== 0
@@ -1200,6 +1277,10 @@ export {
   ENHANCED_WEIGHTS,
   SERVICE_TYPE_MAPPING,
   CARGO_CATEGORIES,
+  CONTAINER_PRICING_MULTIPLIERS,
+  detectContainerType,
+  isOOGCargo,
+  getContainerPricingMultiplier,
   getLearnedWeights,
   learnFromFeedback,
   suggestPriceWithFeedback,

@@ -41,6 +41,7 @@
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.0.0",
     "morgan": "^1.10.0",
+    "mssql": "^12.2.0",
     "openai": "^4.59.1",
     "pdf-parse": "^2.4.5",
     "pg": "^8.13.0",
