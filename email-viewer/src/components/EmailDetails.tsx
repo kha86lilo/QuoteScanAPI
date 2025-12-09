@@ -337,7 +337,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Destination</th>
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Cargo</th>
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Service</th>
-                  <th className="px-3 py-2 text-right font-semibold text-outlook-text">AI Price</th>
+                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">AI Price</th>
                   <th className="px-3 py-2 text-center font-semibold text-outlook-text">Actions</th>
                 </tr>
               </thead>
@@ -373,9 +373,11 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                         {quote.cargo_weight && <span className="text-outlook-textLight text-xs ml-1">({quote.cargo_weight} {quote.weight_unit || 'kg'})</span>}
                       </td>
                       <td className="px-3 py-2 text-outlook-text">{quote.service_type || '-'}</td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-center">
                         {suggestedPrice ? (
-                          <span className="font-semibold text-outlook-blue">{formatPrice(suggestedPrice)}</span>
+                          <span className="inline-block px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm">
+                            {formatPrice(suggestedPrice)}
+                          </span>
                         ) : (
                           <span className="text-outlook-textLight">-</span>
                         )}
@@ -460,25 +462,23 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
       {/* AI Confidence Score */}
       {email.ai_confidence_score !== null && (
         <div className="px-6 py-4 border-t border-outlook-border">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-outlook-textLight">AI Extraction Confidence</span>
-            <div className="flex items-center gap-2">
-              <div className="w-24 bg-gray-200 rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full ${
-                    email.ai_confidence_score >= 0.8
-                      ? 'bg-green-500'
-                      : email.ai_confidence_score >= 0.5
-                      ? 'bg-yellow-500'
-                      : 'bg-red-500'
-                  }`}
-                  style={{ width: `${email.ai_confidence_score * 100}%` }}
-                />
-              </div>
-              <span className="font-medium text-outlook-text">
-                {(email.ai_confidence_score * 100).toFixed(0)}%
-              </span>
+          <div className="flex items-center gap-2 text-sm justify-end">
+            <span className="text-outlook-textLight whitespace-nowrap">AI Confidence</span>
+            <div className="w-24 bg-gray-200 rounded-full h-2">
+              <div
+                className={`h-2 rounded-full ${
+                  email.ai_confidence_score >= 0.8
+                    ? 'bg-green-500'
+                    : email.ai_confidence_score >= 0.5
+                    ? 'bg-yellow-500'
+                    : 'bg-red-500'
+                }`}
+                style={{ width: `${email.ai_confidence_score * 100}%` }}
+              />
             </div>
+            <span className="font-medium text-outlook-text">
+              {(email.ai_confidence_score * 100).toFixed(0)}%
+            </span>
           </div>
         </div>
       )}
