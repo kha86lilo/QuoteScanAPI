@@ -81,7 +81,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-';
-    return '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return Number(price).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   const exportProforma = (quote: QuoteWithMatches) => {
@@ -318,7 +318,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-outlook-text flex items-center gap-2">
             <Building className="w-5 h-5 text-outlook-blue" />
-            Related Quotes
+            Potential Quotes
           </h2>
           <span className="text-sm text-outlook-textLight">
             {email.quotes?.length || 0} quote{(email.quotes?.length || 0) !== 1 ? 's' : ''}
