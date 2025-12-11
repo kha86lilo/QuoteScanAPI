@@ -381,6 +381,7 @@ export interface MatchCriteria {
   hazmat?: number;
   container_type?: number;
   recency?: number;
+  distance_similarity?: number;
 }
 
 export interface MatchedQuoteData {

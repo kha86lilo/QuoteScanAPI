@@ -6,6 +6,7 @@
 import * as db from '../config/db.js';
 import type { QuoteFeedbackData } from '../config/db.js';
 import { getAIService } from './ai/aiServiceFactory.js';
+import { calculateQuoteDistance, type RouteDistance } from './googleMapsService.js';
 import type {
   Quote,
   QuoteMatch,
@@ -80,7 +81,7 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
 
 // Enhanced Weights
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.12,
+  origin_region: 0.10,
   origin_city: 0.08,
   destination_region: 0.12,
   destination_city: 0.08,
@@ -91,7 +92,8 @@ const ENHANCED_WEIGHTS: Record<string, number> = {
   service_compatibility: 0.08,
   hazmat: 0.05,
   container_type: 0.05,
-  recency: 0.05,
+  recency: 0.03,
+  distance_similarity: 0.04,
 };
 
 const WEIGHT_RANGES: WeightRange[] = [
@@ -326,13 +328,42 @@ function jaroWinklerSimilarity(s1: string | null | undefined, s2: string | null 
   return jaro + prefix * 0.1 * (1 - jaro);
 }
 
+/**
+ * Calculate similarity between two route distances
+ * Returns 1.0 for identical distances, decaying toward 0 as difference grows
+ * Returns 0.5 (neutral) if either distance is unavailable
+ */
+function calculateDistanceSimilarity(
+  sourceDistance: number | null | undefined,
+  historicalDistance: number | null | undefined
+): number {
+  // If either distance is unavailable, return neutral score
+  if (!sourceDistance || !historicalDistance || sourceDistance <= 0 || historicalDistance <= 0) {
+    return 0.5;
+  }
+
+  // Calculate percentage difference
+  const maxDist = Math.max(sourceDistance, historicalDistance);
+  const diff = Math.abs(sourceDistance - historicalDistance);
+  const percentDiff = diff / maxDist;
+
+  // Score: 1.0 for identical, decaying toward 0 as difference grows
+  // Using 1 - min(1, percentDiff) means 100%+ difference gives score of 0
+  return 1 - Math.min(1, percentDiff);
+}
+
 interface SimilarityResult {
   score: number;
   criteria: MatchCriteria;
   metadata: MatchMetadata;
 }
 
-function calculateEnhancedSimilarity(sourceQuote: Quote, historicalQuote: Quote): SimilarityResult {
+function calculateEnhancedSimilarity(
+  sourceQuote: Quote,
+  historicalQuote: Quote,
+  sourceDistance?: number | null,
+  historicalDistance?: number | null
+): SimilarityResult {
   const criteria: MatchCriteria = {};
   let totalScore = 0;
   let totalWeight = 0;
@@ -447,6 +478,15 @@ function calculateEnhancedSimilarity(sourceQuote: Quote, historicalQuote: Quote)
 
   totalScore += (criteria.recency || 0) * ENHANCED_WEIGHTS.recency!;
   totalWeight += ENHANCED_WEIGHTS.recency!;
+
+  // Distance Similarity
+  // Use provided distances, or fall back to stored total_distance_miles
+  const srcDist = sourceDistance ?? sourceQuote.total_distance_miles;
+  const histDist = historicalDistance ?? historicalQuote.total_distance_miles;
+  criteria.distance_similarity = calculateDistanceSimilarity(srcDist, histDist);
+
+  totalScore += (criteria.distance_similarity || 0) * ENHANCED_WEIGHTS.distance_similarity!;
+  totalWeight += ENHANCED_WEIGHTS.distance_similarity!;
 
   const finalScore = totalWeight > 0 ? totalScore / totalWeight : 0;
 
@@ -587,7 +627,12 @@ function calculateFeedbackBoost(feedbackData: QuoteFeedbackData | undefined): nu
   return boost;
 }
 
-function findEnhancedMatches(sourceQuote: Quote, historicalQuotes: Quote[], options: MatchingOptions = {}): ExtendedQuoteMatch[] {
+function findEnhancedMatches(
+  sourceQuote: Quote,
+  historicalQuotes: Quote[],
+  options: MatchingOptions = {},
+  sourceDistance?: number | null
+): ExtendedQuoteMatch[] {
   const { minScore = 0.45, maxMatches = 10, feedbackData } = options;
 
   const matches: ExtendedQuoteMatch[] = [];
@@ -595,7 +640,13 @@ function findEnhancedMatches(sourceQuote: Quote, historicalQuotes: Quote[], opti
   for (const historical of historicalQuotes) {
     if (historical.quote_id === sourceQuote.quote_id) continue;
 
-    const { score, criteria, metadata } = calculateEnhancedSimilarity(sourceQuote, historical);
+    // Use provided source distance, historical quotes use their stored total_distance_miles
+    const { score, criteria, metadata } = calculateEnhancedSimilarity(
+      sourceQuote,
+      historical,
+      sourceDistance,
+      historical.total_distance_miles
+    );
 
     // Get feedback data for this historical quote
     const quoteFeedback = feedbackData?.get(historical.quote_id!);
@@ -658,7 +709,8 @@ function findEnhancedMatches(sourceQuote: Quote, historicalQuotes: Quote[], opti
 async function getAIPricingRecommendation(
   sourceQuote: Quote,
   matches: ExtendedQuoteMatch[],
-  options: MatchingOptions = {}
+  options: MatchingOptions = {},
+  routeDistance?: RouteDistance | null
 ): Promise<AIPricingDetails | null> {
   const { useAI = true } = options;
 
@@ -668,7 +720,7 @@ async function getAIPricingRecommendation(
 
   try {
     const aiService = getAIService();
-    const recommendation = await aiService.getPricingRecommendation(sourceQuote, matches);
+    const recommendation = await aiService.getPricingRecommendation(sourceQuote, matches, routeDistance);
     return recommendation;
   } catch (error) {
     const err = error as Error;
@@ -730,7 +782,14 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
         console.log(`    Service: ${sourceQuote.service_type || 'Unknown'}`);
         console.log(`    Cargo: ${(sourceQuote.cargo_description || 'Unknown').substring(0, 50)}...`);
 
-        const matches = findEnhancedMatches(sourceQuote, historicalQuotes, { minScore, maxMatches, feedbackData });
+        // Calculate route distance for the source quote
+        const routeDistance = await calculateQuoteDistance(sourceQuote);
+        const sourceDistanceMiles = routeDistance?.distanceMiles ?? null;
+        if (routeDistance) {
+          console.log(`    Distance: ${routeDistance.distanceMiles} miles (${routeDistance.durationText})`);
+        }
+
+        const matches = findEnhancedMatches(sourceQuote, historicalQuotes, { minScore, maxMatches, feedbackData }, sourceDistanceMiles);
 
         if (matches.length > 0) {
           let aiPricing: AIPricingDetails | null = null;
@@ -738,7 +797,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
           let finalPriceConfidence = matches[0]?.price_confidence || 0;
 
           if (useAI) {
-            aiPricing = await getAIPricingRecommendation(sourceQuote, matches, { useAI });
+            aiPricing = await getAIPricingRecommendation(sourceQuote, matches, { useAI }, routeDistance);
             if (aiPricing && aiPricing.recommended_price) {
               finalSuggestedPrice = aiPricing.recommended_price;
               finalPriceConfidence = aiPricing.confidence === 'HIGH' ? 0.9 :
@@ -1087,17 +1146,46 @@ function generateFeedbackSummary(feedbackData: QuoteFeedbackData | undefined): s
 }
 
 /**
- * Generate pricing recommendation prompt for AI
+ * Get distance category for pricing
  */
-function generatePricingPrompt(sourceQuote: Quote, topMatches: ExtendedQuoteMatch[]): string {
+function getDistanceCategory(distanceMiles: number): string {
+  if (distanceMiles <= 50) return 'Local (0-50 miles)';
+  if (distanceMiles <= 100) return 'Short Haul (50-100 miles)';
+  if (distanceMiles <= 200) return 'Medium Haul (100-200 miles)';
+  if (distanceMiles <= 350) return 'Extended (200-350 miles)';
+  if (distanceMiles <= 500) return 'Long Haul (350-500 miles)';
+  return 'Regional/Cross-Country (500+ miles)';
+}
+/**
+ * Generate pricing recommendation prompt for AI
+ * @param sourceQuote - The new quote being priced
+ * @param topMatches - Historical similar quotes for reference
+ * @param routeDistance - Calculated route distance (optional)
+ */
+function generatePricingPrompt(
+  sourceQuote: Quote,
+  topMatches: ExtendedQuoteMatch[],
+  routeDistance?: RouteDistance | null
+): string {
   // Calculate feedback summary stats
   const matchesWithFeedback = topMatches.filter(m => m.feedbackData && m.feedbackData.total_feedback_count > 0);
   const matchesWithVerifiedPrices = topMatches.filter(m => m.feedbackData?.actual_prices_used && m.feedbackData.actual_prices_used.length > 0);
 
+  // Build distance info string
+  const distanceInfo = routeDistance
+    ? `
+- **Route Distance**: ${routeDistance.distanceMiles} miles (${routeDistance.distanceKm} km)
+- **Estimated Transit Time**: ${routeDistance.durationText}
+- **Distance Category**: ${getDistanceCategory(routeDistance.distanceMiles)}`
+    : sourceQuote.total_distance_miles
+    ? `
+- **Route Distance**: ${sourceQuote.total_distance_miles} miles (from database)`
+    : '';
+
   const prompt = `You are an experienced shipping and transportation pricing specialist. Based on the following quote request and historical similar quotes, provide a pricing recommendation.
 
 ## NEW QUOTE REQUEST
-- **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}
+- **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}${distanceInfo}
 - **Service Type**: ${sourceQuote.service_type || 'Not specified'}
 - **Cargo Description**: ${sourceQuote.cargo_description || 'Not specified'}
 - **Weight**: ${sourceQuote.cargo_weight || 'Not specified'} ${sourceQuote.weight_unit || ''}
@@ -1112,6 +1200,12 @@ ${isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuot
 - State permits may be required ($50-300+ per state)
 - Apply minimum 1.35-1.45x multiplier to base rates
 - Real example: Miami-Orlando OOG was priced at $3,850 vs $2,750 standard (40% premium)
+` : ''}${routeDistance ? `
+**DISTANCE-BASED PRICING GUIDANCE**:
+- Use the actual route distance of **${routeDistance.distanceMiles} miles** to calculate mileage-based rates
+- For Ground/FTL: Apply per-mile rate × ${routeDistance.distanceMiles} miles + fuel surcharge
+- For Drayage: Use distance category "${getDistanceCategory(routeDistance.distanceMiles)}" for base rate reference
+- Estimated transit: ${routeDistance.durationText}
 ` : ''}
 ## SIMILAR HISTORICAL QUOTES
 ${topMatches.slice(0, 5).map((m, i) => {
@@ -1286,4 +1380,6 @@ export {
   suggestPriceWithFeedback,
   generatePricingPrompt,
   recordPricingOutcome,
+  getDistanceCategory,
+  calculateQuoteDistance,
 };

@@ -5,7 +5,7 @@
 
 import type { Request, Response } from 'express';
 import * as db from '../config/db.js';
-import { getFeedbackForHistoricalQuotes } from '../config/db.js';
+import { getFeedbackForHistoricalQuotes, getQuoteIdsByStartDate } from '../config/db.js';
 import {
   asyncHandler,
   NotFoundError,
@@ -22,6 +22,7 @@ import {
   recordPricingOutcome,
   suggestPriceWithFeedback,
 } from '../services/enhancedQuoteMatchingService.js';
+import { calculateQuoteDistance } from '../services/googleMapsService.js';
 import emailExtractorService from '../services/mail/emailExtractor.js';
 import jobProcessor from '../services/jobProcessor.js';
 import { getLatestLastReceivedDateTime } from '../config/db.js';
@@ -117,6 +118,15 @@ interface PricingOutcomeBody {
   actualPriceQuoted?: number;
   actualPriceAccepted?: number;
   jobWon?: boolean;
+}
+
+interface RunAllMatchingBody {
+  startDate: string;
+  minScore?: number;
+  maxMatches?: number;
+  useAI?: boolean;
+  limit?: number;
+  async?: boolean;
 }
 
 /**
@@ -594,15 +604,19 @@ export const getPricingSuggestion = asyncHandler(async (req: Request, res: Respo
     const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
     const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
 
-    // Find enhanced matches with feedback data
+    // Calculate route distance for the source quote
+    const routeDistance = await calculateQuoteDistance(sourceQuote);
+    const sourceDistanceMiles = routeDistance?.distanceMiles ?? null;
+
+    // Find enhanced matches with feedback data and distance
     const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: limit,
       feedbackData,
-    });
+    }, sourceDistanceMiles);
 
-    // Generate pricing prompt (now includes feedback details)
-    const pricingPrompt = generatePricingPrompt(sourceQuote, matches);
+    // Generate pricing prompt with route distance for AI context
+    const pricingPrompt = generatePricingPrompt(sourceQuote, matches, routeDistance);
 
     // Calculate aggregate suggested price
     let aggregateSuggestion: {
@@ -650,6 +664,8 @@ export const getPricingSuggestion = asyncHandler(async (req: Request, res: Respo
         cargoCategory: classifyCargo(sourceQuote.cargo_description),
         weight: sourceQuote.cargo_weight,
         weightUnit: sourceQuote.weight_unit,
+        distanceMiles: routeDistance?.distanceMiles ?? null,
+        estimatedTransit: routeDistance?.durationText ?? null,
       },
       matchCount: matches.length,
       aggregateSuggestion,
@@ -711,15 +727,19 @@ export const analyzeQuoteRequest = asyncHandler(async (req: Request, res: Respon
     const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
     const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
 
-    // Find matches with feedback data
+    // Calculate route distance for the virtual quote
+    const routeDistance = await calculateQuoteDistance(virtualQuote);
+    const sourceDistanceMiles = routeDistance?.distanceMiles ?? null;
+
+    // Find matches with feedback data and distance
     const matches = findEnhancedMatches(virtualQuote as Quote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: 10,
       feedbackData,
-    });
+    }, sourceDistanceMiles);
 
-    // Generate pricing prompt (now includes feedback details)
-    const pricingPrompt = generatePricingPrompt(virtualQuote as Quote, matches);
+    // Generate pricing prompt with route distance for AI context
+    const pricingPrompt = generatePricingPrompt(virtualQuote as Quote, matches, routeDistance);
 
     res.json({
       success: true,
@@ -727,6 +747,8 @@ export const analyzeQuoteRequest = asyncHandler(async (req: Request, res: Respon
         normalizedServiceType: normalizeServiceType(service_type),
         cargoCategory: classifyCargo(cargo_description),
         route: `${origin_city || 'Unknown'}, ${origin_country} → ${destination_city || 'Unknown'}, ${destination_country}`,
+        distanceMiles: routeDistance?.distanceMiles ?? null,
+        estimatedTransit: routeDistance?.durationText ?? null,
       },
       matchCount: matches.length,
       topMatches: matches.slice(0, 5).map((m) => ({
@@ -963,12 +985,16 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
     const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
     const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
 
-    // Find enhanced matches with feedback data
+    // Calculate route distance for the source quote
+    const routeDistance = await calculateQuoteDistance(sourceQuote);
+    const sourceDistanceMiles = routeDistance?.distanceMiles ?? null;
+
+    // Find enhanced matches with feedback data and distance
     const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
       minScore: 0.3,
       maxMatches: 10,
       feedbackData,
-    });
+    }, sourceDistanceMiles);
 
     // Get smart pricing with feedback adjustments
     const smartPricing = await suggestPriceWithFeedback(sourceQuote, matches);
@@ -980,6 +1006,8 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
         route: `${sourceQuote.origin_city || 'Unknown'} → ${sourceQuote.destination_city || 'Unknown'}`,
         service: sourceQuote.service_type,
         cargo: sourceQuote.cargo_description,
+        distanceMiles: routeDistance?.distanceMiles ?? null,
+        estimatedTransit: routeDistance?.durationText ?? null,
       },
       smartPricing,
       matchCount: matches.length,
@@ -997,3 +1025,185 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
     throw new DatabaseError('generating smart pricing', error as Error);
   }
 });
+
+// =====================================================
+// Run All Matching Endpoint
+// =====================================================
+
+/**
+ * Run matching for all quotes created after a start date
+ * POST /api/matches/run-all
+ * Body: { startDate: '2024-01-01', minScore?: 0.45, maxMatches?: 10, useAI?: true, limit?: 1000, async?: true }
+ */
+export const runAllMatching = asyncHandler(async (req: Request, res: Response) => {
+  const {
+    startDate,
+    minScore = 0.45,
+    maxMatches = 10,
+    useAI = true,
+    limit = 1000,
+    async: isAsync = true,
+  } = req.body as RunAllMatchingBody;
+
+  if (!startDate) {
+    throw new ValidationError('startDate is required (ISO format, e.g., 2024-01-01)');
+  }
+
+  // Validate date format
+  const parsedDate = new Date(startDate);
+  if (isNaN(parsedDate.getTime())) {
+    throw new ValidationError('startDate must be a valid date (ISO format, e.g., 2024-01-01)');
+  }
+
+  try {
+    // Get all quote IDs created after the start date
+    const quoteIds = await getQuoteIdsByStartDate(startDate, limit);
+
+    if (quoteIds.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No quotes found after the specified start date',
+        results: {
+          quotesFound: 0,
+          quotesProcessed: 0,
+          matchesCreated: 0,
+        },
+      });
+    }
+
+    const jobData = {
+      startDate,
+      quoteIds,
+      matchingOptions: {
+        minScore,
+        maxMatches,
+        useAI,
+      } as MatchingOptions,
+    };
+
+    if (isAsync) {
+      const jobId = await jobProcessor.createJob(jobData);
+
+      // Run the job asynchronously
+      processRunAllMatchingJob(jobId, quoteIds, { minScore, maxMatches, useAI }).catch((err) => {
+        console.error(`Unhandled error in run-all matching job ${jobId}:`, err);
+      });
+
+      const statusUrl = `${req.protocol}://${req.get('host')}/api/jobs/${jobId}`;
+
+      return res.status(202).json({
+        success: true,
+        message: `Run-all matching job accepted for ${quoteIds.length} quotes`,
+        jobId,
+        statusUrl,
+        quotesFound: quoteIds.length,
+        statusCheckInterval: '5-10 seconds recommended',
+      });
+    }
+
+    // Synchronous processing
+    const results = await processEnhancedMatches(quoteIds, {
+      minScore,
+      maxMatches,
+      useAI,
+    });
+
+    res.json({
+      success: true,
+      message: `Matching completed for ${results.processed} quotes created after ${startDate}`,
+      results: {
+        quotesFound: quoteIds.length,
+        quotesProcessed: results.processed,
+        matchesCreated: results.matchesCreated,
+        matchDetails: results.matchDetails,
+        errors: results.errors,
+      },
+    });
+  } catch (error) {
+    throw new DatabaseError('running matching for all quotes', error as Error);
+  }
+});
+
+/**
+ * Helper function to process run-all matching job asynchronously
+ */
+async function processRunAllMatchingJob(
+  jobId: string,
+  quoteIds: number[],
+  options: MatchingOptions
+): Promise<void> {
+  try {
+    await jobProcessor.updateJob(jobId, {
+      status: 'processing',
+      startedAt: new Date().toISOString(),
+      progress: {
+        current: 0,
+        total: quoteIds.length,
+        percentage: 0,
+      },
+    });
+
+    console.log(`\nStarting run-all matching job ${jobId} for ${quoteIds.length} quotes...`);
+
+    const results = await processEnhancedMatches(quoteIds, options);
+
+    // Record pricing outcomes for learning
+    if (results.matchDetails && results.matchDetails.length > 0) {
+      for (const detail of results.matchDetails) {
+        try {
+          await recordPricingOutcome(detail.quoteId, {
+            suggestedPrice: detail.suggestedPrice ?? undefined,
+            priceConfidence: detail.aiPricing
+              ? detail.aiPricing.confidence === 'HIGH'
+                ? 0.9
+                : detail.aiPricing.confidence === 'MEDIUM'
+                  ? 0.7
+                  : 0.5
+              : detail.priceRange
+                ? 0.7
+                : 0.5,
+            matchCount: detail.matchCount,
+            topMatchScore: detail.bestScore,
+          });
+        } catch (err) {
+          console.log(
+            `  Note: Could not record pricing outcome for quote ${detail.quoteId}: ${(err as Error).message}`
+          );
+        }
+      }
+    }
+
+    await jobProcessor.updateJob(jobId, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      result: {
+        matching: {
+          processed: results.processed,
+          quotesProcessed: results.processed,
+          matchesCreated: results.matchesCreated,
+          matchDetails: results.matchDetails,
+          errors: results.errors,
+        },
+        newQuoteIds: quoteIds,
+      },
+      progress: {
+        current: quoteIds.length,
+        total: quoteIds.length,
+        percentage: 100,
+      },
+    });
+
+    console.log(`Run-all matching job ${jobId} completed successfully`);
+  } catch (error) {
+    console.error(`Run-all matching job ${jobId} failed:`, error);
+
+    await jobProcessor.updateJob(jobId, {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      error: {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+      },
+    });
+  }
+}

@@ -12,7 +12,9 @@
       "Bash(npm run dev:*)",
       "Bash(find:*)",
       "Bash(dir:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell \"Get-Item ''d:\\chipa\\src\\services\\enhancedQuoteMatchingService.ts'' | Select-Object LastWriteTime\")"
     ],
     "deny": [],
     "ask": []

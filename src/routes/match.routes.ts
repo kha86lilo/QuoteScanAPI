@@ -43,6 +43,20 @@ router.get('/feedback/criteria-performance', matchController.getMatchCriteriaPer
 router.post('/run', matchController.runMatchingForQuotes);
 
 /**
+ * Run matching for all quotes created after a start date with smart pricing
+ * POST /api/matches/run-all
+ * Body: {
+ *   startDate: string,        // Required: ISO date (e.g., '2024-01-01')
+ *   minScore?: number,        // Minimum match similarity score (default: 0.45)
+ *   maxMatches?: number,      // Max matches per quote (default: 10)
+ *   useAI?: boolean,          // Use AI for pricing recommendations (default: true)
+ *   limit?: number,           // Max quotes to process (default: 1000)
+ *   async?: boolean           // Run as background job (default: true)
+ * }
+ */
+router.post('/run-all', matchController.runAllMatching);
+
+/**
  * Get pricing suggestion with AI prompt for a quote
  * GET /api/matches/pricing-suggestion/:quoteId
  * Query params: limit (default 5)

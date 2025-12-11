@@ -521,7 +521,7 @@
 					"response": []
 				},
 				{
-					"name": "Run Matching for All Unmatched",
+					"name": "Run Matching for All (by Start Date)",
 					"request": {
 						"method": "POST",
 						"header": [
@@ -532,7 +532,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"minScore\": 0.5,\n  \"maxMatches\": 10,\n  \"limit\": 100,\n  \"algorithmVersion\": \"v1\"\n}"
+							"raw": "{\n  \"startDate\": \"2024-01-01\",\n  \"minScore\": 0.45,\n  \"maxMatches\": 10,\n  \"useAI\": true,\n  \"limit\": 1000,\n  \"async\": true\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/matches/run-all",
@@ -545,7 +545,7 @@
 								"run-all"
 							]
 						},
-						"description": "Run matching for all quotes that don't have matches yet"
+						"description": "Run matching for all quotes created after a start date with smart pricing. Supports AI-powered pricing recommendations and can run as a background job."
 					},
 					"response": []
 				},
@@ -874,6 +874,164 @@
 							]
 						},
 						"description": "Get match criteria performance analysis to identify which criteria need tuning"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Pricing Suggestion",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/pricing-suggestion/:quoteId?limit=5",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"pricing-suggestion",
+								":quoteId"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "5",
+									"description": "Number of similar quotes to include (default: 5)"
+								}
+							],
+							"variable": [
+								{
+									"key": "quoteId",
+									"value": "1",
+									"description": "Quote ID to get pricing suggestion for"
+								}
+							]
+						},
+						"description": "Get AI-powered pricing suggestion with detailed prompt for a quote. Returns similar historical quotes and a formatted prompt for pricing recommendations."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Smart Pricing",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/smart-pricing/:quoteId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"smart-pricing",
+								":quoteId"
+							],
+							"variable": [
+								{
+									"key": "quoteId",
+									"value": "1",
+									"description": "Quote ID to get smart pricing for"
+								}
+							]
+						},
+						"description": "Get smart pricing with feedback-based adjustments. Uses historical feedback data to improve pricing accuracy."
+					},
+					"response": []
+				},
+				{
+					"name": "Analyze Quote Request",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"origin_city\": \"New York\",\n  \"origin_country\": \"USA\",\n  \"destination_city\": \"Los Angeles\",\n  \"destination_country\": \"USA\",\n  \"service_type\": \"FCL\",\n  \"cargo_description\": \"Electronics\",\n  \"cargo_weight\": 5000,\n  \"weight_unit\": \"kg\",\n  \"container_type\": \"40HC\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/analyze",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"analyze"
+							]
+						},
+						"description": "Analyze a quote request without saving to database. Useful for testing and previewing matching results before creating a quote."
+					},
+					"response": []
+				},
+				{
+					"name": "Trigger Feedback Learning",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/learn",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"learn"
+							]
+						},
+						"description": "Trigger feedback learning to update matching weights based on accumulated feedback data. This improves the matching algorithm over time."
+					},
+					"response": []
+				},
+				{
+					"name": "Record Pricing Outcome",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"actualPriceQuoted\": 1500.00,\n  \"actualPriceAccepted\": 1450.00,\n  \"jobWon\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/matches/pricing-outcome/:quoteId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"matches",
+								"pricing-outcome",
+								":quoteId"
+							],
+							"variable": [
+								{
+									"key": "quoteId",
+									"value": "1",
+									"description": "Quote ID to record outcome for"
+								}
+							]
+						},
+						"description": "Record the pricing outcome for a quote. Used for learning - tracks what price was quoted, what was accepted, and whether the job was won."
 					},
 					"response": []
 				}

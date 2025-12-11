@@ -131,19 +131,30 @@ export const PRICING_RECOMMENDATION_PROMPT = `You are a senior pricing analyst a
 ## PRICING FACTORS TO CONSIDER
 
 ### Drayage Pricing
+- **Use actual route distance for accurate pricing** - distance from port to delivery location is critical
 - Port/terminal fees and chassis rental ($50-150/day)
 - Container weight (overweight fees typically start at 44,000 lbs)
 - Demurrage and detention risks
 - Empty container return location
 - Appointment requirements
-- Typical rates: $300-1,200 for local, $800-2,500 for extended
+- Distance-based drayage rates:
+  - Local (0-50 miles from port): $300-600
+  - Short haul (50-100 miles): $500-900
+  - Medium haul (100-200 miles): $800-1,400
+  - Extended (200-350 miles): $1,200-2,000
+  - Long haul (350+ miles): $1,800-3,000+
 
 ### Ground Transportation
+- **IMPORTANT**: Use the actual route distance provided in the quote details for accurate mileage-based pricing
 - Mileage-based rates ($2.50-4.50 per mile for FTL)
+  - Short haul (under 250 miles): $3.50-4.50/mile
+  - Medium haul (250-500 miles): $3.00-3.75/mile
+  - Long haul (500+ miles): $2.50-3.25/mile
 - Fuel surcharge (currently ~25-35% of linehaul)
 - Accessorials (liftgate, inside delivery, detention)
 - Lane density (headhaul vs backhaul)
 - Equipment type (flatbed premium 15-25%)
+- **Distance-based pricing formula**: Base rate = (distance in miles) × (per-mile rate) + fuel surcharge + accessorials
 
 ### Ocean Freight
 - Container type premiums (flat rack +50-100%, reefer +30-50%)

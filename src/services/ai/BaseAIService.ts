@@ -5,6 +5,7 @@
 
 import dotenv from 'dotenv';
 import type { Email, ParsedEmailData, Quote, QuoteMatch, AIPricingDetails } from '../../types/index.js';
+import type { RouteDistance } from '../googleMapsService.js';
 dotenv.config();
 
 interface BatchParseResult {
@@ -294,8 +295,12 @@ Return complete, accurate JSON following this structure exactly.`;
   /**
    * Get pricing recommendation from AI based on quote and historical matches
    */
-  async getPricingRecommendation(sourceQuote: Quote, matches: QuoteMatch[]): Promise<AIPricingDetails | null> {
-    const prompt = this.getPricingPrompt(sourceQuote, matches);
+  async getPricingRecommendation(
+    sourceQuote: Quote,
+    matches: QuoteMatch[],
+    routeDistance?: RouteDistance | null
+  ): Promise<AIPricingDetails | null> {
+    const prompt = this.getPricingPrompt(sourceQuote, matches, { fuelSurcharge: 0.3 }, routeDistance);
 
     return await this.withRetry(async () => {
       const responseText = await this.generateResponse(prompt);
@@ -309,13 +314,25 @@ Return complete, accurate JSON following this structure exactly.`;
   /**
    * Get the pricing recommendation prompt
    */
-  getPricingPrompt(sourceQuote: Quote, matches: QuoteMatch[], marketData: MarketData = { fuelSurcharge: 0.3 }): string {
+  getPricingPrompt(
+    sourceQuote: Quote,
+    matches: QuoteMatch[],
+    marketData: MarketData = { fuelSurcharge: 0.3 },
+    routeDistance?: RouteDistance | null
+  ): string {
     const topMatches = matches.slice(0, 5);
+
+    // Build distance info section if available
+    const distanceInfo = routeDistance
+      ? `- **Route Distance**: ${routeDistance.distanceMiles} miles (${routeDistance.distanceKm} km)
+- **Estimated Transit Time**: ${routeDistance.durationText}`
+      : '';
 
     return `You are a senior pricing analyst at a drayage and transportation company with 15+ years of experience. Your role is to provide accurate, competitive quotes that win business while maintaining profitability.
 
 ## QUOTE REQUEST TO PRICE
 - **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}
+${distanceInfo}
 - **Service Type**: ${sourceQuote.service_type || 'Not specified'}
 - **Cargo Description**: ${sourceQuote.cargo_description || 'Not specified'}
 - **Weight**: ${sourceQuote.cargo_weight || 'Not specified'} ${sourceQuote.weight_unit || ''}
@@ -336,7 +353,7 @@ ${topMatches.map((m, i) => `
 `).join('\n')}
 
 ## PRICING FACTORS TO CONSIDER
-- Mileage-based rates ($2.50-4.50 per mile for FTL)
+- Mileage-based rates ($2.50-4.50 per mile for FTL)${routeDistance ? ` - Use actual distance of ${routeDistance.distanceMiles} miles` : ''}
 - Fuel surcharge (currently ~${((marketData.fuelSurcharge || 0.3) * 100).toFixed(0)}% of linehaul)
 - Accessorials (liftgate, inside delivery, detention)
 - Lane density (headhaul vs backhaul)

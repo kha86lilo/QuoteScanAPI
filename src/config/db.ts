@@ -1292,6 +1292,28 @@ async function getFeedbackForHistoricalQuotes(quoteIds: number[]): Promise<Map<n
 }
 
 /**
+ * Get quote IDs where email was received after a specific date
+ */
+async function getQuoteIdsByStartDate(startDate: string, limit = 1000): Promise<number[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT q.quote_id
+       FROM shipping_quotes q
+       INNER JOIN shipping_emails e ON q.email_id = e.email_id
+       WHERE e.email_received_date >= $1
+       ORDER BY e.email_received_date ASC
+       LIMIT $2`,
+      [startDate, limit]
+    );
+
+    return result.rows.map((row) => row.quote_id);
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Get a quote by ID with fields needed for matching
  */
 async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
@@ -1369,6 +1391,7 @@ export {
   // Historical quotes for matching
   getHistoricalQuotesForMatching,
   getQuoteForMatching,
+  getQuoteIdsByStartDate,
   getFeedbackForHistoricalQuotes,
   // Spammers
   isSpammer,
