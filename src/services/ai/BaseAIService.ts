@@ -4,8 +4,9 @@
  */
 
 import dotenv from 'dotenv';
-import type { Email, ParsedEmailData, Quote, QuoteMatch, AIPricingDetails } from '../../types/index.js';
+import type { Email, ParsedEmailData, Quote, QuoteMatch, AIPricingDetails, PricingReplyResult } from '../../types/index.js';
 import type { RouteDistance } from '../googleMapsService.js';
+import { PRICING_REPLY_EXTRACTION_PROMPT } from '../../prompts/shippingQuotePrompts.js';
 dotenv.config();
 
 interface BatchParseResult {
@@ -309,6 +310,56 @@ Return complete, accurate JSON following this structure exactly.`;
       console.log(`  Success: Generated pricing recommendation with ${this.serviceName}`);
       return parsedData as unknown as AIPricingDetails;
     }, 2);
+  }
+
+/**
+   * Parse a staff reply email to determine if it contains pricing information
+   */
+  async parsePricingReply(
+    emailBody: string,
+    attachmentText = '',
+    maxRetries = 3
+  ): Promise<PricingReplyResult | null> {
+    const emailContent = this.preparePricingReplyContent(emailBody, attachmentText);
+    const prompt = this.getPricingReplyPrompt(emailContent);
+
+    return await this.withRetry(async () => {
+      const responseText = await this.generateResponse(prompt);
+      const parsedData = this.cleanAndParseResponse(responseText) as unknown as PricingReplyResult;
+
+      console.log(`  Success: Parsed pricing reply with ${this.serviceName} (is_pricing: ${parsedData.is_pricing_email}, confidence: ${parsedData.confidence_score})`);
+      return parsedData;
+    }, maxRetries);
+  }
+
+  /**
+   * Prepare email content for pricing reply parsing
+   */
+  preparePricingReplyContent(emailBody: string, attachmentText = ''): string {
+    let content = `Email Body:\n${emailBody}`;
+
+    if (attachmentText && attachmentText.trim()) {
+      content += `\n\n========================================\nATTACHMENT CONTENT:\n========================================\n${attachmentText}`;
+    }
+
+    return content;
+  }
+
+  /**
+   * Get the pricing reply extraction prompt
+   */
+  getPricingReplyPrompt(emailContent: string): string {
+    return `${PRICING_REPLY_EXTRACTION_PROMPT}
+
+========================================
+EMAIL TO ANALYZE:
+========================================
+
+${emailContent}
+
+========================================
+
+Analyze the above email and return ONLY valid JSON (no markdown, no explanation). Start with { and end with }.`;
   }
 
   /**

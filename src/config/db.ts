@@ -25,6 +25,9 @@ import type {
   MatchCriteria,
   AIPricingDetails,
   StaffReply,
+  StaffQuoteReply,
+  PricingReplyResult,
+  PricingData,
 } from '../types/index.js';
 
 dotenv.config();
@@ -1538,6 +1541,323 @@ async function getOriginalEmailIdByConversation(conversationId: string): Promise
   }
 }
 
+// =====================================================
+// Staff Quote Replies Functions
+// =====================================================
+
+interface SaveStaffQuoteReplyOptions {
+  staffReplyId: number;
+  originalEmailId?: number | null;
+  relatedQuoteId?: number | null;
+  quoteSequence?: number;
+  isPricingEmail: boolean;
+  confidenceScore: number;
+  pricingData?: PricingData | null;
+  rawEmailBody?: string | null;
+  attachmentText?: string | null;
+}
+
+/**
+ * Save a single staff quote reply entry to the database
+ */
+async function saveStaffQuoteReplyEntry(
+  options: SaveStaffQuoteReplyOptions
+): Promise<StaffQuoteReply> {
+  const client = await pool.connect();
+  try {
+    const {
+      staffReplyId,
+      originalEmailId,
+      relatedQuoteId,
+      quoteSequence = 1,
+      isPricingEmail,
+      confidenceScore,
+      pricingData,
+      rawEmailBody,
+      attachmentText,
+    } = options;
+
+    const queryResult = await client.query(
+      `INSERT INTO staff_quotes_replies (
+        staff_reply_id, original_email_id, related_quote_id, quote_sequence,
+        is_pricing_email, confidence_score,
+        quoted_price, currency, price_type, price_breakdown,
+        origin_city, origin_state, origin_country,
+        destination_city, destination_state, destination_country,
+        service_type, equipment_type, cargo_description,
+        cargo_weight, weight_unit, container_size, number_of_pieces,
+        quote_valid_until, payment_terms, transit_time, notes,
+        raw_email_body, attachment_text, processed_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $15, $16, $17, $18, $19,
+        $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, NOW()
+      )
+      ON CONFLICT (staff_reply_id, quote_sequence)
+      DO UPDATE SET
+        original_email_id = EXCLUDED.original_email_id,
+        related_quote_id = EXCLUDED.related_quote_id,
+        is_pricing_email = EXCLUDED.is_pricing_email,
+        confidence_score = EXCLUDED.confidence_score,
+        quoted_price = EXCLUDED.quoted_price,
+        currency = EXCLUDED.currency,
+        price_type = EXCLUDED.price_type,
+        price_breakdown = EXCLUDED.price_breakdown,
+        origin_city = EXCLUDED.origin_city,
+        origin_state = EXCLUDED.origin_state,
+        origin_country = EXCLUDED.origin_country,
+        destination_city = EXCLUDED.destination_city,
+        destination_state = EXCLUDED.destination_state,
+        destination_country = EXCLUDED.destination_country,
+        service_type = EXCLUDED.service_type,
+        equipment_type = EXCLUDED.equipment_type,
+        cargo_description = EXCLUDED.cargo_description,
+        cargo_weight = EXCLUDED.cargo_weight,
+        weight_unit = EXCLUDED.weight_unit,
+        container_size = EXCLUDED.container_size,
+        number_of_pieces = EXCLUDED.number_of_pieces,
+        quote_valid_until = EXCLUDED.quote_valid_until,
+        payment_terms = EXCLUDED.payment_terms,
+        transit_time = EXCLUDED.transit_time,
+        notes = EXCLUDED.notes,
+        raw_email_body = EXCLUDED.raw_email_body,
+        attachment_text = EXCLUDED.attachment_text,
+        processed_at = NOW()
+      RETURNING *`,
+      [
+        staffReplyId,
+        originalEmailId ?? null,
+        relatedQuoteId ?? null,
+        quoteSequence,
+        isPricingEmail,
+        confidenceScore,
+        pricingData?.quoted_price ?? null,
+        pricingData?.currency ?? null,
+        pricingData?.price_type ?? null,
+        pricingData?.price_breakdown ? JSON.stringify(pricingData.price_breakdown) : null,
+        pricingData?.origin_city ?? null,
+        pricingData?.origin_state ?? null,
+        pricingData?.origin_country ?? null,
+        pricingData?.destination_city ?? null,
+        pricingData?.destination_state ?? null,
+        pricingData?.destination_country ?? null,
+        pricingData?.service_type ?? null,
+        pricingData?.equipment_type ?? null,
+        pricingData?.cargo_description ?? null,
+        pricingData?.cargo_weight ?? null,
+        pricingData?.weight_unit ?? null,
+        pricingData?.container_size ?? null,
+        pricingData?.number_of_pieces ?? null,
+        pricingData?.quote_valid_until ?? null,
+        pricingData?.payment_terms ?? null,
+        pricingData?.transit_time ?? null,
+        pricingData?.notes ?? null,
+        rawEmailBody ?? null,
+        attachmentText ?? null,
+      ]
+    );
+
+    return queryResult.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Save staff quote reply with multiple quotes support
+ * Creates separate entries for each quote in the quotes array
+ */
+async function saveStaffQuoteReply(
+  staffReplyId: number,
+  result: PricingReplyResult,
+  originalEmailId?: number | null,
+  relatedQuoteIds?: number[] | null,
+  rawEmailBody?: string | null,
+  attachmentText?: string | null
+): Promise<StaffQuoteReply[]> {
+  // Get all quotes from either quotes array or pricing_data (backward compat)
+  const quotes = result.quotes && result.quotes.length > 0
+    ? result.quotes
+    : result.pricing_data
+      ? [result.pricing_data]
+      : [];
+
+  // If not a pricing email or no quotes, save a single entry with null pricing
+  if (!result.is_pricing_email || quotes.length === 0) {
+    const entry = await saveStaffQuoteReplyEntry({
+      staffReplyId,
+      originalEmailId,
+      relatedQuoteId: relatedQuoteIds?.[0] ?? null,
+      quoteSequence: 1,
+      isPricingEmail: result.is_pricing_email,
+      confidenceScore: result.confidence_score,
+      pricingData: null,
+      rawEmailBody,
+      attachmentText,
+    });
+    return [entry];
+  }
+
+  // Save each quote as a separate entry
+  const savedEntries: StaffQuoteReply[] = [];
+
+  for (let i = 0; i < quotes.length; i++) {
+    const quote = quotes[i];
+    const entry = await saveStaffQuoteReplyEntry({
+      staffReplyId,
+      originalEmailId,
+      relatedQuoteId: relatedQuoteIds?.[i] ?? relatedQuoteIds?.[0] ?? null,
+      quoteSequence: i + 1,
+      isPricingEmail: result.is_pricing_email,
+      confidenceScore: result.confidence_score,
+      pricingData: quote,
+      // Only store raw content on first entry to save space
+      rawEmailBody: i === 0 ? rawEmailBody : null,
+      attachmentText: i === 0 ? attachmentText : null,
+    });
+    savedEntries.push(entry);
+  }
+
+  return savedEntries;
+}
+
+/**
+ * Get quote IDs associated with an original email
+ */
+async function getQuoteIdsByEmailId(emailId: number): Promise<number[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT quote_id FROM shipping_quotes WHERE email_id = $1 ORDER BY quote_id`,
+      [emailId]
+    );
+    return result.rows.map((row) => row.quote_id);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get all staff quote replies with pagination
+ */
+async function getAllStaffQuoteReplies(
+  limit = 100,
+  offset = 0,
+  onlyPricing = false
+): Promise<{ replies: StaffQuoteReply[]; totalCount: number }> {
+  const client = await pool.connect();
+  try {
+    const whereClause = onlyPricing ? 'WHERE sqr.is_pricing_email = true' : '';
+
+    const result = await client.query(
+      `SELECT sqr.*, sr.email_message_id, sr.conversation_id, sr.sender_name,
+              sr.sender_email, sr.subject, sr.received_date, sr.original_email_id
+       FROM staff_quotes_replies sqr
+       INNER JOIN staff_replies sr ON sqr.staff_reply_id = sr.reply_id
+       ${whereClause}
+       ORDER BY sqr.processed_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    const countQuery = onlyPricing
+      ? 'SELECT COUNT(*) FROM staff_quotes_replies WHERE is_pricing_email = true'
+      : 'SELECT COUNT(*) FROM staff_quotes_replies';
+    const countResult = await client.query(countQuery);
+    const totalCount = parseInt(countResult.rows[0].count);
+
+    return {
+      replies: result.rows,
+      totalCount,
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get staff quote reply by staff reply ID
+ */
+async function getStaffQuoteReplyByStaffReplyId(staffReplyId: number): Promise<StaffQuoteReply | null> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT sqr.*, sr.email_message_id, sr.conversation_id, sr.sender_name,
+              sr.sender_email, sr.subject, sr.received_date, sr.original_email_id
+       FROM staff_quotes_replies sqr
+       INNER JOIN staff_replies sr ON sqr.staff_reply_id = sr.reply_id
+       WHERE sqr.staff_reply_id = $1`,
+      [staffReplyId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Check if staff reply has already been processed for pricing
+ */
+async function checkStaffQuoteReplyExists(staffReplyId: number): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT COUNT(*) FROM staff_quotes_replies WHERE staff_reply_id = $1',
+      [staffReplyId]
+    );
+    return parseInt(result.rows[0].count) > 0;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get unprocessed staff replies (those without entries in staff_quotes_replies)
+ */
+async function getUnprocessedStaffReplies(limit = 100): Promise<StaffReply[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT sr.*
+       FROM staff_replies sr
+       LEFT JOIN staff_quotes_replies sqr ON sr.reply_id = sqr.staff_reply_id
+       WHERE sqr.id IS NULL
+       ORDER BY sr.received_date DESC
+       LIMIT $1`,
+      [limit]
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get staff quote replies by original email ID
+ */
+async function getStaffQuoteRepliesByOriginalEmailId(
+  originalEmailId: number
+): Promise<StaffQuoteReply[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT sqr.*, sr.email_message_id, sr.conversation_id, sr.sender_name,
+              sr.sender_email, sr.subject, sr.received_date
+       FROM staff_quotes_replies sqr
+       INNER JOIN staff_replies sr ON sqr.staff_reply_id = sr.reply_id
+       WHERE sr.original_email_id = $1
+       ORDER BY sr.received_date DESC`,
+      [originalEmailId]
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
@@ -1586,6 +1906,14 @@ export {
   getAllStaffReplies,
   getStaffRepliesByConversationId,
   getOriginalEmailIdByConversation,
+  // Staff Quote Replies
+  saveStaffQuoteReply,
+  getAllStaffQuoteReplies,
+  getStaffQuoteReplyByStaffReplyId,
+  checkStaffQuoteReplyExists,
+  getUnprocessedStaffReplies,
+  getStaffQuoteRepliesByOriginalEmailId,
+  getQuoteIdsByEmailId,
 };
 
 export type {

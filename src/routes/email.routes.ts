@@ -57,4 +57,19 @@ router.post('/extract-replies', generalApiLimiter, emailController.extractReplie
  */
 router.get('/staff-replies', generalApiLimiter, emailController.getStaffReplies);
 
+/**
+ * Process staff replies to extract pricing information
+ * POST /api/emails/process-staff-quotes
+ * Analyzes staff replies using AI to determine if they contain pricing
+ * Body params: maxReplies (default 50), reprocessAll (default false)
+ */
+router.post('/process-staff-quotes', emailProcessingLimiter, emailController.processStaffQuotes);
+
+/**
+ * Get all staff quote replies with pagination
+ * GET /api/emails/staff-quote-replies
+ * Query params: limit, offset, onlyPricing (true/false)
+ */
+router.get('/staff-quote-replies', generalApiLimiter, emailController.getStaffQuoteReplies);
+
 export default router;

@@ -14,7 +14,14 @@ import {
   saveStaffRepliesBulk,
   getOriginalEmailIdByConversation,
   getAllStaffReplies,
+  getUnprocessedStaffReplies,
+  saveStaffQuoteReply,
+  getAllStaffQuoteReplies,
+  checkStaffQuoteReplyExists,
+  getQuoteIdsByEmailId,
 } from '../config/db.js';
+import { getAIService } from '../services/ai/aiServiceFactory.js';
+import attachmentProcessor from '../services/attachmentProcessor.js';
 import { asyncHandler, ValidationError } from '../middleware/errorHandler.js';
 import type { Email, JobData, StaffReply } from '../types/index.js';
 
@@ -293,6 +300,220 @@ export const getStaffReplies = asyncHandler(async (req: Request, res: Response) 
   const offset = parseInt(req.query.offset as string) || 0;
 
   const { replies, totalCount } = await getAllStaffReplies(limit, offset);
+
+  res.json({
+    success: true,
+    data: replies,
+    pagination: {
+      limit,
+      offset,
+      total: totalCount,
+      hasMore: offset + replies.length < totalCount,
+    },
+  });
+});
+
+interface ProcessStaffQuotesBody {
+  maxReplies?: number;
+  reprocessAll?: boolean;
+}
+
+/**
+ * Process staff replies to extract pricing information
+ * 1. Gets unprocessed staff replies from database
+ * 2. Fetches full email body and attachments from Microsoft Graph
+ * 3. Uses AI to determine if email contains pricing
+ * 4. Saves results to staff_quotes_replies table
+ */
+export const processStaffQuotes = asyncHandler(async (req: Request, res: Response) => {
+  const { maxReplies = 1000, reprocessAll = false } = req.body as ProcessStaffQuotesBody;
+
+  const aiService = getAIService();
+
+  console.log('\n' + '='.repeat(60));
+  console.log('PROCESSING STAFF REPLIES FOR PRICING INFORMATION');
+  console.log('='.repeat(60) + '\n');
+
+  // Step 1: Get unprocessed staff replies
+  const staffReplies = await getUnprocessedStaffReplies(maxReplies);
+
+  if (staffReplies.length === 0) {
+    return res.json({
+      success: true,
+      message: 'No unprocessed staff replies found',
+      results: {
+        processed: 0,
+        pricingEmails: 0,
+        nonPricingEmails: 0,
+        failed: 0,
+      },
+    });
+  }
+
+  console.log(`Found ${staffReplies.length} staff replies to process`);
+
+  const results = {
+    processed: 0,
+    pricingEmails: 0,
+    nonPricingEmails: 0,
+    failed: 0,
+    errors: [] as { replyId: number; subject?: string; error: string }[],
+  };
+
+  // Step 2: Process each staff reply
+  for (let i = 0; i < staffReplies.length; i++) {
+    const staffReply = staffReplies[i];
+    if (!staffReply || !staffReply.reply_id) continue;
+
+    const subject = (staffReply.subject || 'No Subject').substring(0, 50);
+    console.log(`[${i + 1}/${staffReplies.length}] Processing: ${subject}...`);
+
+    try {
+      // Check if already processed (unless reprocessAll is true)
+      if (!reprocessAll) {
+        const exists = await checkStaffQuoteReplyExists(staffReply.reply_id);
+        if (exists) {
+          console.log(`  Already processed, skipping`);
+          continue;
+        }
+      }
+
+      // Fetch full email body from Microsoft Graph
+      let emailBody = staffReply.body_preview || '';
+      let attachmentText = '';
+
+      try {
+        // Fetch the full email with body
+        const token = await microsoftGraphService.default.getAccessToken();
+        const response = await fetch(
+          `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages/${staffReply.email_message_id}?$select=body`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (response.ok) {
+          const emailData = (await response.json()) as {
+            body?: { content?: string; contentType?: string };
+          };
+          if (emailData.body?.content) {
+            emailBody = emailData.body.content;
+            // Strip HTML if needed
+            if (emailData.body.contentType === 'html') {
+              emailBody = emailBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+            }
+          }
+        }
+      } catch (fetchError) {
+        console.log(`  Warning: Could not fetch full email body, using preview`);
+      }
+
+      // Fetch attachments if the email has them
+      if (staffReply.has_attachments) {
+        try {
+          console.log(`  Fetching attachments...`);
+          const attachmentResults = await attachmentProcessor.processEmailAttachments(
+            staffReply.email_message_id
+          );
+          if (attachmentResults.extractedText) {
+            attachmentText = attachmentResults.extractedText;
+            console.log(`  Extracted ${attachmentText.length} chars from attachments`);
+          }
+        } catch (attachError) {
+          const err = attachError as Error;
+          console.log(`  Warning: Could not process attachments: ${err.message}`);
+        }
+      }
+
+      // Step 3: Use AI to analyze email for pricing
+      const pricingResult = await aiService.parsePricingReply(emailBody, attachmentText);
+
+      if (!pricingResult) {
+        console.log(`  Failed to parse with AI`);
+        results.failed++;
+        results.errors.push({
+          replyId: staffReply.reply_id,
+          subject: staffReply.subject,
+          error: 'AI parsing failed',
+        });
+        continue;
+      }
+
+      // Step 4: Get original email ID and related quote IDs
+      const originalEmailId = staffReply.original_email_id ?? null;
+      let relatedQuoteIds: number[] | null = null;
+
+      if (originalEmailId) {
+        try {
+          relatedQuoteIds = await getQuoteIdsByEmailId(originalEmailId);
+          if (relatedQuoteIds.length > 0) {
+            console.log(`  Found ${relatedQuoteIds.length} related quote(s) from original email`);
+          }
+        } catch (quoteErr) {
+          console.log(`  Warning: Could not fetch related quote IDs`);
+        }
+      }
+
+      // Step 5: Save result to database (handles multiple quotes)
+      const savedEntries = await saveStaffQuoteReply(
+        staffReply.reply_id,
+        pricingResult,
+        originalEmailId,
+        relatedQuoteIds,
+        emailBody,
+        attachmentText || null
+      );
+
+      results.processed++;
+      if (pricingResult.is_pricing_email) {
+        const quotesCount = pricingResult.quotes?.length || (pricingResult.pricing_data ? 1 : 0);
+        results.pricingEmails++;
+        const firstQuote = pricingResult.quotes?.[0] || pricingResult.pricing_data;
+        console.log(`  ✓ Pricing email detected (confidence: ${pricingResult.confidence_score}, quotes: ${quotesCount}, price: $${firstQuote?.quoted_price || 'N/A'})`);
+        if (quotesCount > 1) {
+          console.log(`    Saved ${savedEntries.length} quote entries`);
+        }
+      } else {
+        results.nonPricingEmails++;
+        console.log(`  ✗ Not a pricing email (confidence: ${pricingResult.confidence_score})`);
+      }
+    } catch (error) {
+      const err = error as Error;
+      console.error(`  Error processing reply:`, err.message);
+      results.failed++;
+      results.errors.push({
+        replyId: staffReply.reply_id,
+        subject: staffReply.subject,
+        error: err.message,
+      });
+    }
+  }
+
+  console.log('\n' + '='.repeat(60));
+  console.log('PROCESSING COMPLETE');
+  console.log('='.repeat(60));
+  console.log(`Total processed: ${results.processed}`);
+  console.log(`Pricing emails: ${results.pricingEmails}`);
+  console.log(`Non-pricing emails: ${results.nonPricingEmails}`);
+  console.log(`Failed: ${results.failed}`);
+  console.log('='.repeat(60) + '\n');
+
+  res.json({
+    success: true,
+    message: `Processed ${results.processed} staff replies`,
+    results,
+  });
+});
+
+/**
+ * Get all staff quote replies with pagination
+ */
+export const getStaffQuoteReplies = asyncHandler(async (req: Request, res: Response) => {
+  const limit = parseInt(req.query.limit as string) || 100;
+  const offset = parseInt(req.query.offset as string) || 0;
+  const onlyPricing = req.query.onlyPricing === 'true';
+
+  const { replies, totalCount } = await getAllStaffQuoteReplies(limit, offset, onlyPricing);
 
   res.json({
     success: true,

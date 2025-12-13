@@ -614,6 +614,89 @@ export interface StaffReply {
 }
 
 // =============================================================================
+// STAFF QUOTE REPLY TYPES
+// =============================================================================
+
+export interface PriceBreakdownData {
+  linehaul?: number | null;
+  fuel_surcharge?: number | null;
+  accessorials?: number | null;
+  port_fees?: number | null;
+  other_charges?: number | null;
+}
+
+export interface PricingData {
+  quoted_price?: number | null;
+  currency?: string | null;
+  price_type?: 'total' | 'per_unit' | 'per_container' | null;
+  price_breakdown?: PriceBreakdownData | null;
+  origin_city?: string | null;
+  origin_state?: string | null;
+  origin_country?: string | null;
+  destination_city?: string | null;
+  destination_state?: string | null;
+  destination_country?: string | null;
+  service_type?: string | null;
+  equipment_type?: string | null;
+  cargo_description?: string | null;
+  cargo_weight?: number | null;
+  weight_unit?: string | null;
+  container_size?: string | null;
+  number_of_pieces?: number | null;
+  quote_valid_until?: string | null;
+  payment_terms?: string | null;
+  transit_time?: string | null;
+  notes?: string | null;
+}
+
+export interface PricingReplyResult {
+  is_pricing_email: boolean;
+  confidence_score: number;
+  reason?: string;
+  /** Single quote data (for backward compatibility) */
+  pricing_data?: PricingData | null;
+  /** Multiple quotes extracted from the email (when more than one quote is present) */
+  quotes?: PricingData[];
+}
+
+export interface StaffQuoteReply {
+  id?: number;
+  staff_reply_id: number;
+  original_email_id?: number | null;
+  /** Link to the related shipping_quotes entry */
+  related_quote_id?: number | null;
+  /** Sequence number when multiple quotes in same email (1, 2, 3...) */
+  quote_sequence?: number;
+  is_pricing_email: boolean;
+  confidence_score: number;
+  quoted_price?: number | null;
+  currency?: string | null;
+  price_type?: string | null;
+  price_breakdown?: PriceBreakdownData | null;
+  origin_city?: string | null;
+  origin_state?: string | null;
+  origin_country?: string | null;
+  destination_city?: string | null;
+  destination_state?: string | null;
+  destination_country?: string | null;
+  service_type?: string | null;
+  equipment_type?: string | null;
+  cargo_description?: string | null;
+  cargo_weight?: number | null;
+  weight_unit?: string | null;
+  container_size?: string | null;
+  number_of_pieces?: number | null;
+  quote_valid_until?: string | null;
+  payment_terms?: string | null;
+  transit_time?: string | null;
+  notes?: string | null;
+  raw_email_body?: string | null;
+  attachment_text?: string | null;
+  processed_at?: string;
+  created_at?: string;
+}
+
+// =============================================================================
 // WEIGHT RANGE TYPES
 // =============================================================================
 
