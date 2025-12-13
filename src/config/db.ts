@@ -24,6 +24,7 @@ import type {
   Spammer,
   MatchCriteria,
   AIPricingDetails,
+  StaffReply,
 } from '../types/index.js';
 
 dotenv.config();
@@ -1357,6 +1358,186 @@ async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
   }
 }
 
+// =====================================================
+// Staff Replies Functions
+// =====================================================
+
+/**
+ * Get all conversation IDs from shipping_emails
+ */
+async function getConversationIds(): Promise<string[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT DISTINCT conversation_id
+       FROM shipping_emails
+       WHERE conversation_id IS NOT NULL`
+    );
+
+    return result.rows.map(row => row.conversation_id);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Save a staff reply to the database
+ */
+async function saveStaffReply(reply: StaffReply): Promise<StaffReply> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO staff_replies (
+        email_message_id, conversation_id, original_email_id,
+        sender_name, sender_email, subject, body_preview,
+        received_date, has_attachments
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (email_message_id)
+      DO UPDATE SET
+        conversation_id = EXCLUDED.conversation_id,
+        sender_name = EXCLUDED.sender_name,
+        sender_email = EXCLUDED.sender_email,
+        subject = EXCLUDED.subject,
+        body_preview = EXCLUDED.body_preview,
+        received_date = EXCLUDED.received_date,
+        has_attachments = EXCLUDED.has_attachments
+      RETURNING *`,
+      [
+        reply.email_message_id,
+        reply.conversation_id,
+        reply.original_email_id,
+        reply.sender_name,
+        reply.sender_email,
+        reply.subject,
+        reply.body_preview,
+        reply.received_date,
+        reply.has_attachments,
+      ]
+    );
+
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Save multiple staff replies in bulk
+ */
+async function saveStaffRepliesBulk(replies: StaffReply[]): Promise<StaffReply[]> {
+  if (replies.length === 0) return [];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const results: StaffReply[] = [];
+    for (const reply of replies) {
+      const result = await client.query(
+        `INSERT INTO staff_replies (
+          email_message_id, conversation_id, original_email_id,
+          sender_name, sender_email, subject, body_preview,
+          received_date, has_attachments
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (email_message_id)
+        DO UPDATE SET
+          conversation_id = EXCLUDED.conversation_id,
+          sender_name = EXCLUDED.sender_name,
+          sender_email = EXCLUDED.sender_email,
+          subject = EXCLUDED.subject,
+          body_preview = EXCLUDED.body_preview,
+          received_date = EXCLUDED.received_date,
+          has_attachments = EXCLUDED.has_attachments
+        RETURNING *`,
+        [
+          reply.email_message_id,
+          reply.conversation_id,
+          reply.original_email_id,
+          reply.sender_name,
+          reply.sender_email,
+          reply.subject,
+          reply.body_preview,
+          reply.received_date,
+          reply.has_attachments,
+        ]
+      );
+      results.push(result.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    return results;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get all staff replies
+ */
+async function getAllStaffReplies(limit = 100, offset = 0): Promise<{ replies: StaffReply[]; totalCount: number }> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT * FROM staff_replies
+       ORDER BY received_date DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    const countResult = await client.query('SELECT COUNT(*) FROM staff_replies');
+    const totalCount = parseInt(countResult.rows[0].count);
+
+    return {
+      replies: result.rows,
+      totalCount,
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get staff replies by conversation ID
+ */
+async function getStaffRepliesByConversationId(conversationId: string): Promise<StaffReply[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT * FROM staff_replies
+       WHERE conversation_id = $1
+       ORDER BY received_date DESC`,
+      [conversationId]
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get the original email ID for a conversation
+ */
+async function getOriginalEmailIdByConversation(conversationId: string): Promise<number | null> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT email_id FROM shipping_emails
+       WHERE conversation_id = $1
+       ORDER BY email_received_date ASC
+       LIMIT 1`,
+      [conversationId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0].email_id : null;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
@@ -1398,6 +1579,13 @@ export {
   getAllSpammers,
   addSpammer,
   removeSpammer,
+  // Staff Replies
+  getConversationIds,
+  saveStaffReply,
+  saveStaffRepliesBulk,
+  getAllStaffReplies,
+  getStaffRepliesByConversationId,
+  getOriginalEmailIdByConversation,
 };
 
 export type {

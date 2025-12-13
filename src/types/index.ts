@@ -599,6 +599,20 @@ export interface Spammer {
   created_at?: string;
 }
 
+export interface StaffReply {
+  reply_id?: number;
+  email_message_id: string;
+  conversation_id: string;
+  original_email_id?: number;
+  sender_name?: string;
+  sender_email?: string;
+  subject?: string;
+  body_preview?: string;
+  received_date?: string;
+  has_attachments?: boolean;
+  created_at?: string;
+}
+
 // =============================================================================
 // WEIGHT RANGE TYPES
 // =============================================================================

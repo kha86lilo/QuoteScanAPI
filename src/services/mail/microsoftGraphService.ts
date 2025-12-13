@@ -35,6 +35,11 @@ interface GraphApiResponse<T> {
   value: T[];
 }
 
+interface FetchByConversationOptions {
+  conversationIds: string[];
+  senderNames?: string[];
+}
+
 class MicrosoftGraphService {
   /**
    * Get Microsoft Graph API access token using client credentials flow
@@ -218,6 +223,58 @@ class MicrosoftGraphService {
       throw error;
     }
   }
+
+  /**
+   * Fetch emails by conversation IDs filtered by sender names
+   * Used to extract staff replies from email threads
+   */
+  async fetchEmailsByConversationIds(options: FetchByConversationOptions): Promise<Email[]> {
+    const { conversationIds, senderNames = [] } = options;
+
+    if (conversationIds.length === 0 || senderNames.length === 0) {
+      return [];
+    }
+
+    const token = await this.getAccessToken();
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      ConsistencyLevel: 'eventual',
+    };
+
+    const baseUrl = `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages`;
+    const conversationIdSet = new Set(conversationIds);
+    const allEmails: Email[] = [];
+
+    // Fetch emails for each sender name
+    for (const senderName of senderNames) {
+      const params: Record<string, string | number> = {
+        $top: 1000,
+        $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
+        $filter: `contains(from/emailAddress/name, '${senderName}')`,
+      };
+
+      try {
+        const response = await axios.get<GraphApiResponse<Email>>(baseUrl, { headers, params });
+        const emails = response.data.value || [];
+
+        // Filter by conversation IDs client-side
+        const matchingEmails = emails.filter(
+          (email: Email) => email.conversationId && conversationIdSet.has(email.conversationId)
+        );
+
+        allEmails.push(...matchingEmails);
+      } catch (error) {
+        const err = error as { response?: { data?: unknown }; message?: string };
+        console.error(`Error fetching emails for sender ${senderName}:`, err.response?.data || err.message);
+      }
+    }
+
+    // Remove duplicates by email ID
+    const uniqueEmails = Array.from(new Map(allEmails.map(e => [e.id, e])).values());
+
+    console.log(`Success: Fetched ${uniqueEmails.length} emails matching ${conversationIds.length} conversations`);
+    return uniqueEmails;
+  }
 }
 
 const microsoftGraphService = new MicrosoftGraphService();
@@ -225,3 +282,4 @@ export default microsoftGraphService;
 export const getAccessToken = microsoftGraphService.getAccessToken.bind(microsoftGraphService);
 export const fetchEmails = microsoftGraphService.fetchEmails.bind(microsoftGraphService);
 export const advancedEmailSearch = microsoftGraphService.advancedSearch.bind(microsoftGraphService);
+export const fetchEmailsByConversationIds = microsoftGraphService.fetchEmailsByConversationIds.bind(microsoftGraphService);

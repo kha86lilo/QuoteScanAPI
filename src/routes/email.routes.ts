@@ -42,4 +42,19 @@ router.post('/fetch', generalApiLimiter, emailController.fetchEmails);
  */
 router.post('/parse', generalApiLimiter, emailController.parseEmail);
 
+/**
+ * Extract staff replies from email conversations
+ * POST /api/emails/extract-replies
+ * Fetches replies from staff members (danny nasser, tina merkab, seahorse express)
+ * and stores them in the staff_replies table
+ */
+router.post('/extract-replies', generalApiLimiter, emailController.extractReplies);
+
+/**
+ * Get all staff replies with pagination
+ * GET /api/emails/staff-replies
+ * Query params: limit, offset
+ */
+router.get('/staff-replies', generalApiLimiter, emailController.getStaffReplies);
+
 export default router;
