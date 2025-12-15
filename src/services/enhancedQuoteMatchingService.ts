@@ -53,7 +53,7 @@ const SERVICE_COMPATIBILITY: Record<string, string[]> = {
  * CRITICAL: Correct service type based on route distance
  * Ocean freight can't have 5-mile routes - that's clearly drayage
  */
-function correctServiceTypeByDistance(serviceType: string, distanceMiles: number | null | undefined): string {
+function correctServiceTypeByDistance(serviceType: string, distanceMiles: number | null | undefined, logCorrection: boolean = false): string {
   if (!distanceMiles || distanceMiles <= 0) return serviceType;
   
   const normalized = serviceType.toUpperCase();
@@ -61,13 +61,13 @@ function correctServiceTypeByDistance(serviceType: string, distanceMiles: number
   // If labeled Ocean/Intermodal but route is under 150 miles, it's actually drayage/ground
   // Real ocean routes are typically 500+ miles minimum (coastal to inland or trans-oceanic)
   if ((normalized === 'OCEAN' || normalized === 'INTERMODAL') && distanceMiles < 150) {
-    console.log(`    Service type correction: ${serviceType} -> DRAYAGE (distance: ${distanceMiles} miles too short for ocean)`);
+    if (logCorrection) console.log(`    Service type correction: ${serviceType} -> DRAYAGE (distance: ${distanceMiles} miles too short for ocean)`);
     return 'DRAYAGE';
   }
   
   // If labeled Ocean but route is under 300 miles, likely intermodal at best
   if (normalized === 'OCEAN' && distanceMiles < 300) {
-    console.log(`    Service type correction: ${serviceType} -> INTERMODAL (distance: ${distanceMiles} miles)`);
+    if (logCorrection) console.log(`    Service type correction: ${serviceType} -> INTERMODAL (distance: ${distanceMiles} miles)`);
     return 'INTERMODAL';
   }
   
@@ -106,21 +106,25 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
 };
 
 // Enhanced Weights - adjusted for better pricing accuracy
-// Balance between route matching and historical pricing reliability
+// TUNED based on evaluation results showing 31% accuracy
+// Key insight: Ground/Drayage pricing is cargo-driven, Ocean is route-driven
+// - Machinery/equipment = expensive regardless of distance
+// - General freight = cheaper per mile
+// - The matching algorithm finds high-priced machinery matches for general freight
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.07,
-  origin_city: 0.05,
-  destination_region: 0.09,
-  destination_city: 0.05,
-  cargo_category: 0.12,      // Cargo type impacts pricing
-  cargo_weight_range: 0.15,  // Weight CRITICALLY impacts price - heavy equipment costs much more
-  number_of_pieces: 0.03,
-  service_type: 0.18,        // CRITICAL - avoid ocean/ground mixing
-  service_compatibility: 0.06,
-  hazmat: 0.05,
-  container_type: 0.05,
-  recency: 0.03,
-  distance_similarity: 0.12,  // Distance matters but not overwhelming
+  origin_region: 0.06,       // Region matters less than cargo type
+  origin_city: 0.04,         // City matching helps but not critical
+  destination_region: 0.08,  // Destination region somewhat important
+  destination_city: 0.04,    // City matching helps but not critical
+  cargo_category: 0.20,      // HIGHEST - cargo type is the main price driver
+  cargo_weight_range: 0.12,  // Important - heavy = expensive
+  number_of_pieces: 0.04,    // Multiple pieces add handling cost
+  service_type: 0.15,        // Service type matters (ground vs ocean vs drayage)
+  service_compatibility: 0.03,
+  hazmat: 0.06,              // Hazmat is expensive
+  container_type: 0.05,      // Container type affects price
+  recency: 0.06,             // Recent quotes more accurate
+  distance_similarity: 0.10, // REDUCED - distance matters less than cargo type
 };
 
 const WEIGHT_RANGES: WeightRange[] = [
@@ -358,31 +362,39 @@ function jaroWinklerSimilarity(s1: string | null | undefined, s2: string | null 
 /**
  * Calculate similarity between two route distances
  * Returns 1.0 for identical distances, decaying toward 0 as difference grows
- * Returns 0.3 (low) if either distance is unavailable - penalize unknown distances
+ * Returns 0.4 if either distance is unavailable
  * 
- * STRICTER: Uses exponential decay so 50% difference = 0.25 score (not 0.5)
- * This ensures we match routes of similar distance for better pricing
+ * TUNED: Uses softer linear decay so 50% difference = 0.5 score
+ * Shipping prices correlate with distance but many other factors matter
  */
 function calculateDistanceSimilarity(
   sourceDistance: number | null | undefined,
   historicalDistance: number | null | undefined
 ): number {
-  // If either distance is unavailable, return low score to penalize unknown
+  // If either distance is unavailable, return moderate score (not too punitive)
   if (!sourceDistance || !historicalDistance || sourceDistance <= 0 || historicalDistance <= 0) {
-    return 0.3;
+    return 0.4;
   }
 
   // Calculate percentage difference
   const maxDist = Math.max(sourceDistance, historicalDistance);
-  const diff = Math.abs(sourceDistance - historicalDistance);
+  const minDist = Math.min(sourceDistance, historicalDistance);
+  const diff = maxDist - minDist;
   const percentDiff = diff / maxDist;
 
-  // Stricter scoring with exponential decay:
-  // 0% diff = 1.0, 25% diff = 0.56, 50% diff = 0.25, 100% diff = 0
-  // Formula: (1 - percentDiff)^2 with cap at 0
-  const score = Math.pow(Math.max(0, 1 - percentDiff), 2);
-  
-  return Math.max(0, Math.min(1, score));
+  // Use banded scoring for more stable matches:
+  // 0-10% diff = 1.0 (excellent match)
+  // 10-25% diff = 0.85 (good match)
+  // 25-50% diff = 0.65 (acceptable match)
+  // 50-75% diff = 0.45 (weak match)
+  // 75-100% diff = 0.25 (poor match)
+  // >100% diff = 0.1 (very poor)
+  if (percentDiff <= 0.10) return 1.0;
+  if (percentDiff <= 0.25) return 0.85;
+  if (percentDiff <= 0.50) return 0.65;
+  if (percentDiff <= 0.75) return 0.45;
+  if (percentDiff <= 1.00) return 0.25;
+  return 0.1;
 }
 
 interface SimilarityResult {
@@ -454,19 +466,19 @@ function calculateEnhancedSimilarity(
   totalScore += (criteria.cargo_category || 0) * ENHANCED_WEIGHTS.cargo_category!;
   totalWeight += ENHANCED_WEIGHTS.cargo_category!;
 
-  // Weight Matching
+  // Weight Matching - less strict to allow more matches
   const sourceWeightRange = getWeightRange(sourceQuote.cargo_weight, sourceQuote.weight_unit);
   const histWeightRange = getWeightRange(historicalQuote.cargo_weight, historicalQuote.weight_unit);
 
   if (sourceWeightRange && histWeightRange) {
     const weightDiff = Math.abs(WEIGHT_RANGES.indexOf(sourceWeightRange) - WEIGHT_RANGES.indexOf(histWeightRange));
-    // STRICTER: Each weight class difference halves the score
-    // Same: 1.0, ±1 class: 0.5, ±2 classes: 0.2, ±3+ classes: 0.05
+    // TUNED: Softer penalties for weight class differences
+    // Same: 1.0, ±1 class: 0.7, ±2 classes: 0.4, ±3+ classes: 0.2
     criteria.cargo_weight_range = weightDiff === 0 ? 1.0 :
-                                  weightDiff === 1 ? 0.5 :
-                                  weightDiff === 2 ? 0.2 : 0.05;
+                                  weightDiff === 1 ? 0.7 :
+                                  weightDiff === 2 ? 0.4 : 0.2;
   } else {
-    criteria.cargo_weight_range = 0.4; // Lower default when weight unknown
+    criteria.cargo_weight_range = 0.5; // Neutral default when weight unknown
   }
 
   totalScore += (criteria.cargo_weight_range || 0) * ENHANCED_WEIGHTS.cargo_weight_range!;
@@ -507,13 +519,17 @@ function calculateEnhancedSimilarity(
   totalScore += (criteria.container_type || 0) * ENHANCED_WEIGHTS.container_type!;
   totalWeight += ENHANCED_WEIGHTS.container_type!;
 
-  // Recency
+  // Recency - less aggressive decay so 6-month old quotes still score well
+  // New: half-life of 120 days (was 60), so 120-day old quotes score 0.5
+  // This means 6-month old quotes score ~0.35 instead of ~0.12
   const quoteDate = historicalQuote.quote_date || historicalQuote.created_at;
   if (quoteDate) {
     const ageDays = (Date.now() - new Date(quoteDate).getTime()) / (1000 * 60 * 60 * 24);
-    criteria.recency = Math.max(0, Math.pow(0.5, ageDays / 60));
+    // Less aggressive decay: half-life of 120 days
+    // 0 days = 1.0, 60 days = 0.71, 120 days = 0.5, 180 days = 0.35, 360 days = 0.12
+    criteria.recency = Math.max(0.1, Math.pow(0.5, ageDays / 120));
   } else {
-    criteria.recency = 0.5;
+    criteria.recency = 0.4; // Slightly lower default for unknown dates
   }
 
   totalScore += (criteria.recency || 0) * ENHANCED_WEIGHTS.recency!;

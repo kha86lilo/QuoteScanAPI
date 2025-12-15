@@ -364,16 +364,29 @@ Return complete, accurate JSON following this structure exactly.`;
       console.log(`  Hazmat detected: cap doubled to ${maxCap}`);
     }
     
-    // For short distances, apply stricter caps (but not too strict)
-    if (distanceMiles > 0 && distanceMiles < 50 && !isHazmat) {
-      maxCap = Math.min(maxCap, 2500);  // Very short haul cap (was 1500, too strict)
-      console.log(`  Very short haul: cap set to ${maxCap}`)
-    } else if (distanceMiles > 0 && distanceMiles < 100 && !isHazmat) {
-      maxCap = Math.min(maxCap, 3500);  // Short haul cap (was 2500)
-      console.log(`  Short haul: cap set to ${maxCap}`)
-    } else if (distanceMiles > 0 && distanceMiles < 200 && !isHazmat) {
-      maxCap = Math.min(maxCap, 5000);  // Local cap (was 4000)
-      console.log(`  Local: cap set to ${maxCap}`)
+    // TUNED: Less aggressive caps - only apply when we have high confidence
+    // The hard caps were causing too many false negatives (capping correct high prices)
+    // New strategy: Use historical baseline range as primary constraint, caps as fallback only
+    
+    // Only apply distance-based caps if distance is reliable AND historical data is sparse
+    const hasReliableDistance = distanceMiles > 0;
+    const hasHistoricalData = baselinePrice > 0 && filteredPrices.length >= 2;
+    
+    // If we have good historical data, trust it more than distance-based caps
+    if (!hasHistoricalData && hasReliableDistance) {
+      // Only apply distance caps when we lack historical data
+      if (distanceMiles < 50 && !isHazmat && effectiveServiceType.includes('drayage')) {
+        maxCap = Math.min(maxCap, 3000);  // Very short drayage
+        console.log(`  Very short drayage: cap set to ${maxCap} (no historical data)`)
+      } else if (distanceMiles < 100 && !isHazmat && effectiveServiceType.includes('drayage')) {
+        maxCap = Math.min(maxCap, 4000);  // Short drayage
+        console.log(`  Short drayage: cap set to ${maxCap} (no historical data)`)
+      }
+      // For ground/ocean, don't apply distance caps - too variable
+    } else if (hasHistoricalData) {
+      // Trust historical data - only cap at 2x the max historical price
+      maxCap = Math.max(maxCap, Math.round(maxHistPrice * 2));
+      console.log(`  Historical data available: cap adjusted to ${maxCap}`);
     }
 
     return await this.withRetry(async () => {
@@ -384,19 +397,19 @@ Return complete, accurate JSON following this structure exactly.`;
       if (parsedData.recommended_price) {
         const originalPrice = parsedData.recommended_price;
         
-        // Apply floor from historical baseline
+        // Apply floor from historical baseline (trust historical data as primary source)
         if (baselinePrice > 0 && parsedData.recommended_price < enforcementFloor) {
+          console.log(`  Historical floor: $${parsedData.recommended_price} -> $${enforcementFloor}`);
           parsedData.recommended_price = enforcementFloor;
-          console.log(`  Clamped: $${originalPrice} -> $${enforcementFloor} (below floor)`);
         }
         
         // Apply ceiling from historical baseline
         if (baselinePrice > 0 && parsedData.recommended_price > enforcementCeiling) {
+          console.log(`  Historical ceiling: $${originalPrice} -> $${enforcementCeiling}`);
           parsedData.recommended_price = enforcementCeiling;
-          console.log(`  Clamped: $${originalPrice} -> $${enforcementCeiling} (above ceiling)`);
         }
         
-        // Apply absolute service-type + distance cap (always enforced)
+        // Apply absolute service-type cap (always enforced as last resort)
         if (parsedData.recommended_price > maxCap) {
           console.log(`  Hard cap: $${parsedData.recommended_price} -> $${maxCap} (${effectiveServiceType}, ${distanceMiles} miles)`);
           parsedData.recommended_price = maxCap;
