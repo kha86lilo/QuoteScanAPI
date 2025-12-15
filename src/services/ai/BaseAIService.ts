@@ -463,10 +463,21 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const isDrayage = serviceType.includes('drayage') || serviceType.includes('container');
     const isIntermodal = serviceType.includes('intermodal') || serviceType.includes('multimodal');
 
+    // Detect short-haul moves (under 100 miles)
+    const distanceMiles = routeDistance?.distanceMiles || 0;
+    const isShortHaul = distanceMiles > 0 && distanceMiles < 100;
+    const isVeryShort = distanceMiles > 0 && distanceMiles < 50;
+
     // Determine constraint level based on baseline reliability
     // For pure ocean, use lower price caps since ocean-only is typically $1,000-3,000
     let constraintNote = '';
-    if (isPureOcean) {
+    if (isVeryShort && isDrayage) {
+      // Very short drayage should be capped very low
+      constraintNote = `\n**SHORT-HAUL DRAYAGE CONSTRAINT**: This is a very short drayage move (${distanceMiles} miles). Short-haul drayage typically costs $400-800. You MUST return a price under $1,000 unless there are exceptional cargo requirements.`;
+    } else if (isShortHaul && isDrayage) {
+      // Short drayage moves have specific pricing
+      constraintNote = `\n**LOCAL DRAYAGE CONSTRAINT**: This is a short local drayage move (${distanceMiles} miles). Local drayage typically costs $500-1,200. You MUST return a price under $1,500 unless cargo is oversized/overweight.`;
+    } else if (isPureOcean) {
       // Pure ocean freight should be capped lower - typical rates are $1,000-3,500 per container
       const oceanCap = 4000;
       constraintNote = `\n**OCEAN-ONLY CONSTRAINT**: This is PURE ocean freight (no drayage/delivery). Ocean-only FCL rates are typically $1,000-3,500. You MUST return a price under $${oceanCap.toLocaleString()}.`;
