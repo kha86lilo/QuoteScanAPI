@@ -49,6 +49,31 @@ const SERVICE_COMPATIBILITY: Record<string, string[]> = {
   'STORAGE': ['STORAGE'],
 };
 
+/**
+ * CRITICAL: Correct service type based on route distance
+ * Ocean freight can't have 5-mile routes - that's clearly drayage
+ */
+function correctServiceTypeByDistance(serviceType: string, distanceMiles: number | null | undefined): string {
+  if (!distanceMiles || distanceMiles <= 0) return serviceType;
+  
+  const normalized = serviceType.toUpperCase();
+  
+  // If labeled Ocean/Intermodal but route is under 150 miles, it's actually drayage/ground
+  // Real ocean routes are typically 500+ miles minimum (coastal to inland or trans-oceanic)
+  if ((normalized === 'OCEAN' || normalized === 'INTERMODAL') && distanceMiles < 150) {
+    console.log(`    Service type correction: ${serviceType} -> DRAYAGE (distance: ${distanceMiles} miles too short for ocean)`);
+    return 'DRAYAGE';
+  }
+  
+  // If labeled Ocean but route is under 300 miles, likely intermodal at best
+  if (normalized === 'OCEAN' && distanceMiles < 300) {
+    console.log(`    Service type correction: ${serviceType} -> INTERMODAL (distance: ${distanceMiles} miles)`);
+    return 'INTERMODAL';
+  }
+  
+  return serviceType;
+}
+
 // Geographic Regions
 const US_REGIONS: Record<string, string[]> = {
   'NORTHEAST': ['new york', 'newark', 'boston', 'philadelphia', 'baltimore', 'ny', 'nj', 'pa', 'ma', 'ct', 'ri', 'nh', 'vt', 'me'],
@@ -81,21 +106,21 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
 };
 
 // Enhanced Weights - adjusted for better pricing accuracy
-// Service type is critical - ocean vs ground are very different pricing models
+// Distance is CRITICAL for ground/drayage pricing - increased significantly
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.08,
-  origin_city: 0.05,
-  destination_region: 0.10,
-  destination_city: 0.05,
-  cargo_category: 0.12,      // Cargo type impacts pricing
-  cargo_weight_range: 0.10,  // Weight significantly impacts price
-  number_of_pieces: 0.04,
-  service_type: 0.18,        // CRITICAL - increased to avoid ocean/ground mixing
-  service_compatibility: 0.08,
-  hazmat: 0.06,
-  container_type: 0.06,
-  recency: 0.04,
-  distance_similarity: 0.04,
+  origin_region: 0.06,
+  origin_city: 0.04,
+  destination_region: 0.08,
+  destination_city: 0.04,
+  cargo_category: 0.10,      // Cargo type impacts pricing
+  cargo_weight_range: 0.08,  // Weight significantly impacts price
+  number_of_pieces: 0.03,
+  service_type: 0.18,        // CRITICAL - avoid ocean/ground mixing
+  service_compatibility: 0.06,
+  hazmat: 0.05,
+  container_type: 0.05,
+  recency: 0.03,
+  distance_similarity: 0.20,  // INCREASED: Distance is critical for pricing accuracy
 };
 
 const WEIGHT_RANGES: WeightRange[] = [
@@ -333,15 +358,18 @@ function jaroWinklerSimilarity(s1: string | null | undefined, s2: string | null 
 /**
  * Calculate similarity between two route distances
  * Returns 1.0 for identical distances, decaying toward 0 as difference grows
- * Returns 0.5 (neutral) if either distance is unavailable
+ * Returns 0.3 (low) if either distance is unavailable - penalize unknown distances
+ * 
+ * STRICTER: Uses exponential decay so 50% difference = 0.25 score (not 0.5)
+ * This ensures we match routes of similar distance for better pricing
  */
 function calculateDistanceSimilarity(
   sourceDistance: number | null | undefined,
   historicalDistance: number | null | undefined
 ): number {
-  // If either distance is unavailable, return neutral score
+  // If either distance is unavailable, return low score to penalize unknown
   if (!sourceDistance || !historicalDistance || sourceDistance <= 0 || historicalDistance <= 0) {
-    return 0.5;
+    return 0.3;
   }
 
   // Calculate percentage difference
@@ -349,9 +377,12 @@ function calculateDistanceSimilarity(
   const diff = Math.abs(sourceDistance - historicalDistance);
   const percentDiff = diff / maxDist;
 
-  // Score: 1.0 for identical, decaying toward 0 as difference grows
-  // Using 1 - min(1, percentDiff) means 100%+ difference gives score of 0
-  return 1 - Math.min(1, percentDiff);
+  // Stricter scoring with exponential decay:
+  // 0% diff = 1.0, 25% diff = 0.56, 50% diff = 0.25, 100% diff = 0
+  // Formula: (1 - percentDiff)^2 with cap at 0
+  const score = Math.pow(Math.max(0, 1 - percentDiff), 2);
+  
+  return Math.max(0, Math.min(1, score));
 }
 
 interface SimilarityResult {
@@ -396,9 +427,13 @@ function calculateEnhancedSimilarity(
   totalScore += (criteria.destination_city || 0) * ENHANCED_WEIGHTS.destination_city!;
   totalWeight += ENHANCED_WEIGHTS.destination_region! + ENHANCED_WEIGHTS.destination_city!;
 
-  // Service Type Matching
-  const sourceService = normalizeServiceType(sourceQuote.service_type);
-  const histService = normalizeServiceType(historicalQuote.service_type);
+  // Service Type Matching - apply distance-based correction first
+  const rawSourceService = normalizeServiceType(sourceQuote.service_type);
+  const rawHistService = normalizeServiceType(historicalQuote.service_type);
+  
+  // Correct service types based on distance - prevents Ocean label on 5-mile routes
+  const sourceService = correctServiceTypeByDistance(rawSourceService, sourceDistance);
+  const histService = correctServiceTypeByDistance(rawHistService, historicalDistance);
 
   criteria.service_type = sourceService === histService ? 1 : 0;
 

@@ -303,12 +303,96 @@ Return complete, accurate JSON following this structure exactly.`;
   ): Promise<AIPricingDetails | null> {
     const prompt = this.getPricingPrompt(sourceQuote, matches, { fuelSurcharge: 0.3 }, routeDistance);
 
+    // Calculate baseline for bounds enforcement
+    const validMatches = matches.slice(0, 5).filter(m => {
+      const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice;
+      return price && price > 0;
+    });
+    const prices = validMatches.map(m => m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice || 0);
+    const filteredPrices = this.filterPriceOutliers(prices);
+    const baselinePrice = filteredPrices.length > 0 
+      ? filteredPrices.reduce((a, b) => a + b, 0) / filteredPrices.length 
+      : 0;
+    const minHistPrice = filteredPrices.length > 0 ? Math.min(...filteredPrices) : 0;
+    const maxHistPrice = filteredPrices.length > 0 ? Math.max(...filteredPrices) : 0;
+    
+    // Calculate enforcement bounds (slightly wider than prompt constraints)
+    const enforcementFloor = baselinePrice > 0 ? Math.round(minHistPrice * 0.70) : 100;
+    const enforcementCeiling = baselinePrice > 0 ? Math.round(maxHistPrice * 1.50) : 50000;
+
+    // Detect service type for absolute caps
+    const serviceType = (sourceQuote.service_type || '').toLowerCase();
+    const distanceMiles = routeDistance?.distanceMiles || 0;
+    
+    console.log(`  Distance for caps: ${distanceMiles} miles, service: ${serviceType}`);
+    
+    // CRITICAL: Apply distance-based service type correction
+    // Ocean freight can't have 5-mile routes - that's drayage
+    let effectiveServiceType = serviceType;
+    if ((serviceType.includes('ocean') || serviceType.includes('intermodal')) && distanceMiles > 0 && distanceMiles < 150) {
+      effectiveServiceType = 'drayage';
+      console.log(`  Service correction: ${serviceType} -> drayage (${distanceMiles} miles too short for ocean)`);
+    }
+    
+    // Absolute caps based on effective service type
+    const absoluteCaps: Record<string, number> = {
+      'drayage': 3000,      // Local drayage max
+      'ground': 8000,       // Ground max for typical routes
+      'ocean': 6000,        // Pure ocean freight max (per container)
+      'intermodal': 10000,  // Multi-modal max
+      'default': 8000       // Fallback
+    };
+    
+    // Get cap based on effective service type
+    let maxCap = absoluteCaps['default'];
+    for (const [key, cap] of Object.entries(absoluteCaps)) {
+      if (effectiveServiceType.includes(key)) {
+        maxCap = cap;
+        break;
+      }
+    }
+    
+    // For short distances, apply even stricter caps
+    if (distanceMiles > 0 && distanceMiles < 50) {
+      maxCap = Math.min(maxCap, 1500);  // Very short haul cap
+      console.log(`  Very short haul: cap set to ${maxCap}`)
+    } else if (distanceMiles > 0 && distanceMiles < 100) {
+      maxCap = Math.min(maxCap, 2500);  // Short haul cap
+      console.log(`  Short haul: cap set to ${maxCap}`)
+    } else if (distanceMiles > 0 && distanceMiles < 200) {
+      maxCap = Math.min(maxCap, 4000);  // Local cap
+      console.log(`  Local: cap set to ${maxCap}`)
+    }
+
     return await this.withRetry(async () => {
       const responseText = await this.generateResponse(prompt);
-      const parsedData = this.cleanAndParseResponse(responseText);
+      const parsedData = this.cleanAndParseResponse(responseText) as unknown as AIPricingDetails;
+
+      // ENFORCE BOUNDS: If AI returned price outside bounds, clamp it
+      if (parsedData.recommended_price) {
+        const originalPrice = parsedData.recommended_price;
+        
+        // Apply floor from historical baseline
+        if (baselinePrice > 0 && parsedData.recommended_price < enforcementFloor) {
+          parsedData.recommended_price = enforcementFloor;
+          console.log(`  Clamped: $${originalPrice} -> $${enforcementFloor} (below floor)`);
+        }
+        
+        // Apply ceiling from historical baseline
+        if (baselinePrice > 0 && parsedData.recommended_price > enforcementCeiling) {
+          parsedData.recommended_price = enforcementCeiling;
+          console.log(`  Clamped: $${originalPrice} -> $${enforcementCeiling} (above ceiling)`);
+        }
+        
+        // Apply absolute service-type + distance cap (always enforced)
+        if (parsedData.recommended_price > maxCap) {
+          console.log(`  Hard cap: $${parsedData.recommended_price} -> $${maxCap} (${effectiveServiceType}, ${distanceMiles} miles)`);
+          parsedData.recommended_price = maxCap;
+        }
+      }
 
       console.log(`  Success: Generated pricing recommendation with ${this.serviceName}`);
-      return parsedData as unknown as AIPricingDetails;
+      return parsedData;
     }, 2);
   }
 
@@ -448,11 +532,23 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
 
     // Check if historical range is reliable (not too wide)
     const priceSpread = maxHistPrice > 0 ? (maxHistPrice - minHistPrice) / ((maxHistPrice + minHistPrice) / 2) : 0;
-    const isReliableBaseline = baselinePrice > 100 && pricesList.length >= 2 && priceSpread < 1.5; // spread < 150% of average
+    const isReliableBaseline = baselinePrice > 100 && pricesList.length >= 2 && priceSpread < 1.0; // spread < 100% is reliable
+    
+    // When spread is wide, use a more conservative baseline (lower quartile + weighted avg) / 2
+    // This prevents overpricing when historical data has high variance
+    let conservativeBaseline = baselinePrice;
+    if (!isReliableBaseline && pricesList.length >= 2) {
+      const sortedPrices = [...pricesList].sort((a, b) => a - b);
+      const lowerQuartileIdx = Math.floor(sortedPrices.length * 0.25);
+      const lowerQuartile = sortedPrices[lowerQuartileIdx] || sortedPrices[0] || baselinePrice;
+      conservativeBaseline = Math.round((lowerQuartile + baselinePrice) / 2);
+      console.log(`    Wide spread detected: Using conservative baseline $${conservativeBaseline} (was $${baselinePrice})`);
+    }
+    const effectiveBaseline = isReliableBaseline ? baselinePrice : conservativeBaseline;
 
     // Log the baseline calculation with outlier info
     const outlierCount = allPrices.length - filteredPrices.length;
-    console.log(`    Historical prices: ${allPrices.length} total, ${outlierCount} outliers filtered, Baseline: $${baselinePrice.toLocaleString()}, Range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}, Reliable: ${isReliableBaseline}`);
+    console.log(`    Historical prices: ${allPrices.length} total, ${outlierCount} outliers filtered, Baseline: $${effectiveBaseline.toLocaleString()}, Range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}, Reliable: ${isReliableBaseline}`);
 
     // Build distance info section if available
     const distanceInfo = routeDistance
@@ -481,26 +577,29 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const isOversizeHeavy = hasExplicitWeight && weightInLbs > 40000;
 
     // Determine constraint level based on baseline reliability
-    // For pure ocean, use lower price caps since ocean-only is typically $1,000-3,000
+    // MUCH STRICTER: Always enforce maximum deviation from baseline
     let constraintNote = '';
+    
+    // Calculate absolute bounds based on effective baseline - NEVER deviate more than 50% from reliable baseline
+    const absoluteFloor = isReliableBaseline ? Math.round(minHistPrice * 0.80) : Math.round(effectiveBaseline * 0.50);
+    const absoluteCeiling = isReliableBaseline ? Math.round(maxHistPrice * 1.25) : Math.round(effectiveBaseline * 2.0);
     
     // Heavy haul override - only for verified 40,000+ lbs cargo
     if (isOversizeHeavy) {
-      constraintNote = `\n**HEAVY HAUL CONSTRAINT**: This cargo weighs ${weightInLbs.toLocaleString()} lbs (over 40,000 lbs). Heavy haul requires specialized equipment. Add 50-100% premium to baseline.`;
+      constraintNote = `\n**HEAVY HAUL CONSTRAINT**: This cargo weighs ${weightInLbs.toLocaleString()} lbs (over 40,000 lbs). Heavy haul requires specialized equipment. Add 30-50% premium to baseline.`;
     } else if (isVeryShort && isDrayage) {
       // Very short drayage should be capped very low
-      constraintNote = `\n**SHORT-HAUL DRAYAGE CONSTRAINT**: This is a very short drayage move (${distanceMiles} miles). Short-haul drayage typically costs $400-800. You MUST return a price under $1,000 unless there are exceptional cargo requirements.`;
+      constraintNote = `\n**SHORT-HAUL DRAYAGE CONSTRAINT**: This is a very short drayage move (${distanceMiles} miles). Short-haul drayage typically costs $400-800. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${Math.min(absoluteCeiling, 1500).toLocaleString()}.`;
     } else if (isShortHaul && isDrayage) {
       // Short drayage moves have specific pricing
-      constraintNote = `\n**LOCAL DRAYAGE CONSTRAINT**: This is a short local drayage move (${distanceMiles} miles). Local drayage typically costs $500-1,200. You MUST return a price under $1,500 unless cargo is oversized/overweight.`;
+      constraintNote = `\n**LOCAL DRAYAGE CONSTRAINT**: This is a short local drayage move (${distanceMiles} miles). Local drayage typically costs $500-1,500. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${Math.min(absoluteCeiling, 2500).toLocaleString()}.`;
     } else if (isPureOcean) {
       // Pure ocean freight should be capped lower - typical rates are $1,000-3,500 per container
-      const oceanCap = 4000;
-      constraintNote = `\n**OCEAN-ONLY CONSTRAINT**: This is PURE ocean freight (no drayage/delivery). Ocean-only FCL rates are typically $1,000-3,500. You MUST return a price under $${oceanCap.toLocaleString()}.`;
+      constraintNote = `\n**OCEAN-ONLY CONSTRAINT**: This is PURE ocean freight (no drayage/delivery). You MUST return a price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}.`;
     } else if (isReliableBaseline) {
-      constraintNote = `\n**STRICT CONSTRAINT**: Historical data is reliable. You MUST return a price between $${Math.round(minHistPrice * 0.85).toLocaleString()} and $${Math.round(maxHistPrice * 1.15).toLocaleString()}.`;
-    } else if (baselinePrice > 0) {
-      constraintNote = `\n**MODERATE GUIDANCE**: Historical data has high variance. Use $${baselinePrice.toLocaleString()} as a starting point but apply distance and cargo-based adjustments.`;
+      constraintNote = `\n**STRICT CONSTRAINT (ENFORCED)**: Historical data is reliable. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Do NOT exceed these bounds.`;
+    } else if (effectiveBaseline > 0) {
+      constraintNote = `\n**MODERATE CONSTRAINT**: Historical data has variance. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Stay close to baseline of $${effectiveBaseline.toLocaleString()}.`;
     } else {
       constraintNote = `\n**FALLBACK PRICING**: No reliable historical data. Use industry-standard pricing for the service type.`;
     }
@@ -509,7 +608,7 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
 
 ## CRITICAL PRICING RULE
 **YOU MUST BASE YOUR PRICE ON THE HISTORICAL MATCHES BELOW.**
-- The weighted average of similar historical quotes is: **$${baselinePrice.toLocaleString()}**
+- The weighted average of similar historical quotes is: **$${effectiveBaseline.toLocaleString()}**
 - Historical price range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}
 - Number of historical references: ${pricesList.length}
 ${constraintNote}
@@ -565,13 +664,13 @@ ${isOcean ? `### PURE OCEAN FREIGHT Pricing
 - Very different route distance: Adjust proportionally
 
 ## OUTPUT FORMAT
-Return ONLY valid JSON. Your recommended_price should be close to the weighted average of $${baselinePrice.toLocaleString()} unless adjustments are clearly needed:
+Return ONLY valid JSON. Your recommended_price should be close to the weighted average of $${effectiveBaseline.toLocaleString()} unless adjustments are clearly needed:
 
 {
-  "recommended_price": ${baselinePrice > 0 ? baselinePrice : 0},
-  "floor_price": ${baselinePrice > 0 ? Math.round(baselinePrice * 0.85) : 0},
-  "target_price": ${baselinePrice > 0 ? baselinePrice : 0},
-  "ceiling_price": ${baselinePrice > 0 ? Math.round(baselinePrice * 1.15) : 0},
+  "recommended_price": ${effectiveBaseline > 0 ? effectiveBaseline : 0},
+  "floor_price": ${effectiveBaseline > 0 ? Math.round(effectiveBaseline * 0.85) : 0},
+  "target_price": ${effectiveBaseline > 0 ? effectiveBaseline : 0},
+  "ceiling_price": ${effectiveBaseline > 0 ? Math.round(effectiveBaseline * 1.15) : 0},
   "confidence": "HIGH|MEDIUM|LOW",
   "price_breakdown": {
     "linehaul": 0.00,

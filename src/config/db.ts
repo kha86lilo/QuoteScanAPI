@@ -1105,26 +1105,61 @@ async function getHistoricalQuotesForMatching(
   const { limit = 500, onlyWithPrice = true } = options;
   const client = await pool.connect();
   try {
-    let whereClause = 'WHERE 1=1';
     const params: (number[] | number)[] = [];
     let paramIndex = 1;
 
+    let excludeClause = '';
     if (excludeQuoteIds.length > 0) {
-      whereClause += ` AND quote_id != ALL($${paramIndex}::int[])`;
+      excludeClause = `AND q.quote_id != ALL($${paramIndex}::int[])`;
       params.push(excludeQuoteIds);
       paramIndex++;
     }
 
-    if (onlyWithPrice) {
-      // Filter for quotes with reasonable prices (between $100 and $50,000)
-      whereClause += ` AND (
-        (final_agreed_price IS NOT NULL AND final_agreed_price >= 100 AND final_agreed_price <= 50000)
-        OR (initial_quote_amount IS NOT NULL AND initial_quote_amount >= 100 AND initial_quote_amount <= 50000)
-      )`;
-    }
-
+    // IMPROVED: Join with staff_quotes_replies to get actual pricing data
+    // This is more accurate than using initial_quote_amount which is often $0 or NULL
     const result = await client.query(
-      `SELECT
+      `WITH quote_prices AS (
+        SELECT 
+          q.quote_id,
+          q.client_company_name,
+          q.origin_city,
+          q.origin_state_province,
+          q.origin_country,
+          q.destination_city,
+          q.destination_state_province,
+          q.destination_country,
+          q.cargo_description,
+          q.cargo_weight,
+          q.weight_unit,
+          q.cargo_length,
+          q.cargo_width,
+          q.cargo_height,
+          q.dimension_unit,
+          q.number_of_pieces,
+          q.service_type,
+          q.service_level,
+          q.packaging_type,
+          q.hazardous_material,
+          -- Use MAX price from staff replies as the quote price (most complete/final)
+          MAX(sqr.quoted_price) as reply_price,
+          q.initial_quote_amount,
+          q.final_agreed_price,
+          q.job_won,
+          q.quote_status,
+          q.quote_date,
+          q.created_at
+        FROM shipping_quotes q
+        LEFT JOIN staff_quotes_replies sqr ON q.quote_id = sqr.related_quote_id
+          AND sqr.is_pricing_email = true
+          AND sqr.quoted_price IS NOT NULL
+          AND sqr.quoted_price >= 100
+          AND sqr.quoted_price <= 50000
+        WHERE q.origin_city IS NOT NULL
+          AND q.destination_city IS NOT NULL
+          ${excludeClause}
+        GROUP BY q.quote_id
+      )
+      SELECT 
         quote_id,
         client_company_name,
         origin_city,
@@ -1145,14 +1180,16 @@ async function getHistoricalQuotesForMatching(
         service_level,
         packaging_type,
         hazardous_material,
-        initial_quote_amount,
-        final_agreed_price,
+        -- Prefer reply_price, fallback to final_agreed_price, then initial_quote_amount
+        COALESCE(reply_price, final_agreed_price, initial_quote_amount) as initial_quote_amount,
+        COALESCE(reply_price, final_agreed_price) as final_agreed_price,
         job_won,
         quote_status,
         quote_date,
         created_at
-      FROM shipping_quotes
-      ${whereClause}
+      FROM quote_prices
+      WHERE ${onlyWithPrice ? `COALESCE(reply_price, final_agreed_price, initial_quote_amount) >= 100
+        AND COALESCE(reply_price, final_agreed_price, initial_quote_amount) <= 50000` : '1=1'}
       ORDER BY created_at DESC
       LIMIT $${paramIndex}`,
       [...params, limit]
