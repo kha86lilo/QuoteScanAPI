@@ -324,7 +324,13 @@ Return complete, accurate JSON following this structure exactly.`;
     const serviceType = (sourceQuote.service_type || '').toLowerCase();
     const distanceMiles = routeDistance?.distanceMiles || 0;
     
-    console.log(`  Distance for caps: ${distanceMiles} miles, service: ${serviceType}`);
+    // Check for hazmat - increases price significantly
+    const isHazmat = sourceQuote.hazardous_material === true || 
+      (sourceQuote.cargo_description || '').toLowerCase().includes('hazmat') ||
+      (sourceQuote.cargo_description || '').toLowerCase().includes('hazardous') ||
+      (sourceQuote.cargo_description || '').toLowerCase().match(/\bun\d{3,4}\b/);
+    
+    console.log(`  Distance for caps: ${distanceMiles} miles, service: ${serviceType}${isHazmat ? ', HAZMAT' : ''}`);
     
     // CRITICAL: Apply distance-based service type correction
     // Ocean freight can't have 5-mile routes - that's drayage
@@ -336,7 +342,7 @@ Return complete, accurate JSON following this structure exactly.`;
     
     // Absolute caps based on effective service type
     const absoluteCaps: Record<string, number> = {
-      'drayage': 3000,      // Local drayage max
+      'drayage': 4000,      // Local drayage max (increased for containers)
       'ground': 8000,       // Ground max for typical routes
       'ocean': 6000,        // Pure ocean freight max (per container)
       'intermodal': 10000,  // Multi-modal max
@@ -352,15 +358,21 @@ Return complete, accurate JSON following this structure exactly.`;
       }
     }
     
-    // For short distances, apply even stricter caps
-    if (distanceMiles > 0 && distanceMiles < 50) {
-      maxCap = Math.min(maxCap, 1500);  // Very short haul cap
+    // Hazmat doubles the cap (hazmat containers legitimately cost 2-3x more)
+    if (isHazmat) {
+      maxCap = maxCap * 2;
+      console.log(`  Hazmat detected: cap doubled to ${maxCap}`);
+    }
+    
+    // For short distances, apply stricter caps (but not too strict)
+    if (distanceMiles > 0 && distanceMiles < 50 && !isHazmat) {
+      maxCap = Math.min(maxCap, 2500);  // Very short haul cap (was 1500, too strict)
       console.log(`  Very short haul: cap set to ${maxCap}`)
-    } else if (distanceMiles > 0 && distanceMiles < 100) {
-      maxCap = Math.min(maxCap, 2500);  // Short haul cap
+    } else if (distanceMiles > 0 && distanceMiles < 100 && !isHazmat) {
+      maxCap = Math.min(maxCap, 3500);  // Short haul cap (was 2500)
       console.log(`  Short haul: cap set to ${maxCap}`)
-    } else if (distanceMiles > 0 && distanceMiles < 200) {
-      maxCap = Math.min(maxCap, 4000);  // Local cap
+    } else if (distanceMiles > 0 && distanceMiles < 200 && !isHazmat) {
+      maxCap = Math.min(maxCap, 5000);  // Local cap (was 4000)
       console.log(`  Local: cap set to ${maxCap}`)
     }
 
@@ -566,17 +578,27 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const hasExplicitWeight = cargoWeight > 0 && weightUnit.length > 0;
     const weightInLbs = weightUnit.includes('kg') ? cargoWeight * 2.205 : cargoWeight;
     const isOversizeHeavy = hasExplicitWeight && weightInLbs > 40000;
+    
+    // Detect hazardous materials - significant price premium
+    const isHazmat = sourceQuote.hazardous_material === true || 
+      (sourceQuote.cargo_description || '').toLowerCase().includes('hazmat') ||
+      (sourceQuote.cargo_description || '').toLowerCase().includes('hazardous') ||
+      !!(sourceQuote.cargo_description || '').toLowerCase().match(/\bun\d{3,4}\b/);
 
     // Determine constraint level based on baseline reliability
     // MUCH STRICTER: Always enforce maximum deviation from baseline
     let constraintNote = '';
     
     // Calculate absolute bounds based on effective baseline - NEVER deviate more than 50% from reliable baseline
-    const absoluteFloor = isReliableBaseline ? Math.round(minHistPrice * 0.80) : Math.round(effectiveBaseline * 0.50);
-    const absoluteCeiling = isReliableBaseline ? Math.round(maxHistPrice * 1.25) : Math.round(effectiveBaseline * 2.0);
+    // For hazmat, multiply bounds by 2-3x since historical matches may not be hazmat
+    const hazmatMultiplier = isHazmat ? 2.5 : 1.0;
+    const absoluteFloor = isReliableBaseline ? Math.round(minHistPrice * 0.80 * hazmatMultiplier) : Math.round(effectiveBaseline * 0.50 * hazmatMultiplier);
+    const absoluteCeiling = isReliableBaseline ? Math.round(maxHistPrice * 1.25 * hazmatMultiplier) : Math.round(effectiveBaseline * 2.0 * hazmatMultiplier);
     
-    // Heavy haul override - only for verified 40,000+ lbs cargo
-    if (isOversizeHeavy) {
+    // Hazmat override - highest priority
+    if (isHazmat) {
+      constraintNote = `\n**HAZMAT CONSTRAINT (CRITICAL)**: This is hazardous materials cargo requiring special handling, permits, and compliance. HAZMAT adds 100-200% premium to standard rates. Your recommended price MUST be between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Historical matches may NOT be hazmat - apply appropriate premium.`;
+    } else if (isOversizeHeavy) {
       constraintNote = `\n**HEAVY HAUL CONSTRAINT**: This cargo weighs ${weightInLbs.toLocaleString()} lbs (over 40,000 lbs). Heavy haul requires specialized equipment. Add 30-50% premium to baseline.`;
     } else if (isVeryShort && isDrayage) {
       // Very short drayage should be capped very low

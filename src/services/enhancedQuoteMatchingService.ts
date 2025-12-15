@@ -113,7 +113,7 @@ const ENHANCED_WEIGHTS: Record<string, number> = {
   destination_region: 0.09,
   destination_city: 0.05,
   cargo_category: 0.12,      // Cargo type impacts pricing
-  cargo_weight_range: 0.10,  // Weight significantly impacts price
+  cargo_weight_range: 0.15,  // Weight CRITICALLY impacts price - heavy equipment costs much more
   number_of_pieces: 0.03,
   service_type: 0.18,        // CRITICAL - avoid ocean/ground mixing
   service_compatibility: 0.06,
@@ -459,11 +459,14 @@ function calculateEnhancedSimilarity(
   const histWeightRange = getWeightRange(historicalQuote.cargo_weight, historicalQuote.weight_unit);
 
   if (sourceWeightRange && histWeightRange) {
-    criteria.cargo_weight_range = sourceWeightRange.label === histWeightRange.label ? 1 :
-                                  Math.abs(WEIGHT_RANGES.indexOf(sourceWeightRange) -
-                                          WEIGHT_RANGES.indexOf(histWeightRange)) <= 1 ? 0.7 : 0.3;
+    const weightDiff = Math.abs(WEIGHT_RANGES.indexOf(sourceWeightRange) - WEIGHT_RANGES.indexOf(histWeightRange));
+    // STRICTER: Each weight class difference halves the score
+    // Same: 1.0, ±1 class: 0.5, ±2 classes: 0.2, ±3+ classes: 0.05
+    criteria.cargo_weight_range = weightDiff === 0 ? 1.0 :
+                                  weightDiff === 1 ? 0.5 :
+                                  weightDiff === 2 ? 0.2 : 0.05;
   } else {
-    criteria.cargo_weight_range = 0.5;
+    criteria.cargo_weight_range = 0.4; // Lower default when weight unknown
   }
 
   totalScore += (criteria.cargo_weight_range || 0) * ENHANCED_WEIGHTS.cargo_weight_range!;
