@@ -38,11 +38,12 @@ const SERVICE_TYPE_MAPPING: Record<string, string> = {
   'storage': 'STORAGE', 'warehousing': 'STORAGE', 'warehouse': 'STORAGE',
 };
 
+// Service compatibility - be strict to avoid mixing different pricing models
 const SERVICE_COMPATIBILITY: Record<string, string[]> = {
-  'GROUND': ['GROUND', 'DRAYAGE', 'INTERMODAL'],
-  'DRAYAGE': ['DRAYAGE', 'GROUND', 'INTERMODAL'],
-  'OCEAN': ['OCEAN', 'INTERMODAL'],
-  'INTERMODAL': ['INTERMODAL', 'GROUND', 'DRAYAGE', 'OCEAN'],
+  'GROUND': ['GROUND', 'DRAYAGE'],  // Ground can match drayage (both trucking-based)
+  'DRAYAGE': ['DRAYAGE', 'GROUND'],  // Drayage can match ground
+  'OCEAN': ['OCEAN'],  // STRICT: Ocean only matches ocean (pricing is very different)
+  'INTERMODAL': ['INTERMODAL', 'OCEAN'],  // Intermodal can match ocean or itself
   'TRANSLOAD': ['TRANSLOAD', 'DRAYAGE'],
   'AIR': ['AIR'],
   'STORAGE': ['STORAGE'],
@@ -79,20 +80,21 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
   'GENERAL': ['general cargo', 'pallets', 'boxes', 'cartons', 'freight'],
 };
 
-// Enhanced Weights
+// Enhanced Weights - adjusted for better pricing accuracy
+// Service type is critical - ocean vs ground are very different pricing models
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.10,
-  origin_city: 0.08,
-  destination_region: 0.12,
-  destination_city: 0.08,
-  cargo_category: 0.10,
-  cargo_weight_range: 0.08,
-  number_of_pieces: 0.07,
-  service_type: 0.12,
+  origin_region: 0.08,
+  origin_city: 0.05,
+  destination_region: 0.10,
+  destination_city: 0.05,
+  cargo_category: 0.12,      // Cargo type impacts pricing
+  cargo_weight_range: 0.10,  // Weight significantly impacts price
+  number_of_pieces: 0.04,
+  service_type: 0.18,        // CRITICAL - increased to avoid ocean/ground mixing
   service_compatibility: 0.08,
-  hazmat: 0.05,
-  container_type: 0.05,
-  recency: 0.03,
+  hazmat: 0.06,
+  container_type: 0.06,
+  recency: 0.04,
   distance_similarity: 0.04,
 };
 
@@ -753,7 +755,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
 
   try {
     const historicalQuotes = await db.getHistoricalQuotesForMatching(newQuoteIds, {
-      limit: 1000,
+      limit: 2000,
       onlyWithPrice: true,
     });
 

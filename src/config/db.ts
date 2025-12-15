@@ -1116,7 +1116,11 @@ async function getHistoricalQuotesForMatching(
     }
 
     if (onlyWithPrice) {
-      whereClause += ` AND (final_agreed_price IS NOT NULL OR initial_quote_amount IS NOT NULL)`;
+      // Filter for quotes with reasonable prices (between $100 and $50,000)
+      whereClause += ` AND (
+        (final_agreed_price IS NOT NULL AND final_agreed_price >= 100 AND final_agreed_price <= 50000)
+        OR (initial_quote_amount IS NOT NULL AND initial_quote_amount >= 100 AND initial_quote_amount <= 50000)
+      )`;
     }
 
     const result = await client.query(
@@ -1143,6 +1147,7 @@ async function getHistoricalQuotesForMatching(
         hazardous_material,
         initial_quote_amount,
         final_agreed_price,
+        job_won,
         quote_status,
         quote_date,
         created_at
