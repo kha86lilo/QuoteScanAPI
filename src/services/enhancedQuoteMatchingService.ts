@@ -105,26 +105,26 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
   'GENERAL': ['general cargo', 'pallets', 'boxes', 'cartons', 'freight'],
 };
 
-// Enhanced Weights - adjusted for better pricing accuracy
-// TUNED based on evaluation results showing 31% accuracy
-// Key insight: Ground/Drayage pricing is cargo-driven, Ocean is route-driven
-// - Machinery/equipment = expensive regardless of distance
-// - General freight = cheaper per mile
-// - The matching algorithm finds high-priced machinery matches for general freight
+// Enhanced Weights - BALANCED configuration for price accuracy
+// Key changes from cargo-focused weights (which regressed to 17%):
+// 1. Distance is a major price driver - can't ignore it
+// 2. Service type is critical - different pricing models
+// 3. Cargo category matters but not as much when we have good distance data
+// 4. Recency helps but don't overprioritize
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.06,       // Region matters less than cargo type
-  origin_city: 0.04,         // City matching helps but not critical
-  destination_region: 0.08,  // Destination region somewhat important
-  destination_city: 0.04,    // City matching helps but not critical
-  cargo_category: 0.20,      // HIGHEST - cargo type is the main price driver
-  cargo_weight_range: 0.12,  // Important - heavy = expensive
-  number_of_pieces: 0.04,    // Multiple pieces add handling cost
-  service_type: 0.15,        // Service type matters (ground vs ocean vs drayage)
-  service_compatibility: 0.03,
+  origin_region: 0.08,       // Regional pricing differences
+  origin_city: 0.04,         // City helps for local knowledge
+  destination_region: 0.10,  // Destination affects pricing
+  destination_city: 0.04,    // City helps for local knowledge
+  cargo_category: 0.12,      // BALANCED - cargo matters but not dominant
+  cargo_weight_range: 0.10,  // Weight class affects equipment needed
+  number_of_pieces: 0.03,    // Piece count has small impact
+  service_type: 0.15,        // CRITICAL - different pricing models
+  service_compatibility: 0.04,
   hazmat: 0.06,              // Hazmat is expensive
-  container_type: 0.05,      // Container type affects price
-  recency: 0.06,             // Recent quotes more accurate
-  distance_similarity: 0.10, // REDUCED - distance matters less than cargo type
+  container_type: 0.04,      // Container type for ocean/drayage
+  recency: 0.06,             // Recent quotes are better
+  distance_similarity: 0.14, // IMPORTANT - distance drives fuel/labor costs
 };
 
 const WEIGHT_RANGES: WeightRange[] = [

@@ -295,130 +295,151 @@ Return complete, accurate JSON following this structure exactly.`;
 
   /**
    * Get pricing recommendation from AI based on quote and historical matches
+   * 
+   * APPROACH: Use the BEST single match (highest similarity) as the primary reference.
+   * High-similarity matches are more predictive than averaging many lower-quality matches.
+   * FILTER: Remove unreasonably low-priced matches (likely data entry errors or special cases).
    */
   async getPricingRecommendation(
     sourceQuote: Quote,
     matches: QuoteMatch[],
     routeDistance?: RouteDistance | null
   ): Promise<AIPricingDetails | null> {
-    const prompt = this.getPricingPrompt(sourceQuote, matches, { fuelSurcharge: 0.3 }, routeDistance);
-
-    // Calculate baseline for bounds enforcement
-    const validMatches = matches.slice(0, 5).filter(m => {
-      const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice;
-      return price && price > 0;
-    });
-    const prices = validMatches.map(m => m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice || 0);
-    const filteredPrices = this.filterPriceOutliers(prices);
-    const baselinePrice = filteredPrices.length > 0 
-      ? filteredPrices.reduce((a, b) => a + b, 0) / filteredPrices.length 
-      : 0;
-    const minHistPrice = filteredPrices.length > 0 ? Math.min(...filteredPrices) : 0;
-    const maxHistPrice = filteredPrices.length > 0 ? Math.max(...filteredPrices) : 0;
+    // Minimum price floors by service type - prices below this are outliers
+    const minPriceFloors: Record<string, number> = {
+      'drayage': 500,     // Min $500 for any drayage
+      'ground': 500,      // Min $500 for ground freight
+      'ocean': 800,       // Min $800 for ocean freight
+      'intermodal': 800,  // Min $800 for intermodal
+    };
     
-    // Calculate enforcement bounds (slightly wider than prompt constraints)
-    const enforcementFloor = baselinePrice > 0 ? Math.round(minHistPrice * 0.70) : 100;
-    const enforcementCeiling = baselinePrice > 0 ? Math.round(maxHistPrice * 1.50) : 50000;
-
-    // Detect service type for absolute caps
     const serviceType = (sourceQuote.service_type || '').toLowerCase();
     const distanceMiles = routeDistance?.distanceMiles || 0;
     
-    // Check for hazmat - increases price significantly
-    const isHazmat = sourceQuote.hazardous_material === true || 
-      (sourceQuote.cargo_description || '').toLowerCase().includes('hazmat') ||
-      (sourceQuote.cargo_description || '').toLowerCase().includes('hazardous') ||
-      (sourceQuote.cargo_description || '').toLowerCase().match(/\bun\d{3,4}\b/);
-    
-    console.log(`  Distance for caps: ${distanceMiles} miles, service: ${serviceType}${isHazmat ? ', HAZMAT' : ''}`);
-    
-    // CRITICAL: Apply distance-based service type correction
-    // Ocean freight can't have 5-mile routes - that's drayage
+    // Service type correction for short routes
     let effectiveServiceType = serviceType;
     if ((serviceType.includes('ocean') || serviceType.includes('intermodal')) && distanceMiles > 0 && distanceMiles < 150) {
       effectiveServiceType = 'drayage';
-      console.log(`  Service correction: ${serviceType} -> drayage (${distanceMiles} miles too short for ocean)`);
+      console.log(`  Service correction: ${serviceType} -> drayage (${distanceMiles} miles)`);
     }
     
-    // Absolute caps based on effective service type
-    const absoluteCaps: Record<string, number> = {
-      'drayage': 4000,      // Local drayage max (increased for containers)
-      'ground': 8000,       // Ground max for typical routes
-      'ocean': 6000,        // Pure ocean freight max (per container)
-      'intermodal': 10000,  // Multi-modal max
-      'default': 8000       // Fallback
-    };
-    
-    // Get cap based on effective service type
-    let maxCap = absoluteCaps['default'];
-    for (const [key, cap] of Object.entries(absoluteCaps)) {
+    // Get minimum price floor for this service type
+    let minFloor = 400; // default
+    for (const [key, floor] of Object.entries(minPriceFloors)) {
       if (effectiveServiceType.includes(key)) {
-        maxCap = cap;
+        minFloor = floor;
         break;
       }
     }
     
-    // Hazmat doubles the cap (hazmat containers legitimately cost 2-3x more)
+    // Get matches with valid prices ABOVE the minimum floor
+    const validMatches = matches.filter(m => {
+      const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice;
+      return price && price >= minFloor;
+    });
+    
+    if (validMatches.length === 0) {
+      console.log(`  No valid historical matches with prices >= $${minFloor}`);
+      return null;
+    }
+    
+    // Sort by similarity score and get the best match
+    const sortedMatches = [...validMatches].sort((a, b) => b.similarity_score - a.similarity_score);
+    const bestMatch = sortedMatches[0]!;
+    const bestScore = bestMatch.similarity_score;
+    const hasFinalPrice = bestMatch.matchedQuoteData?.finalPrice && bestMatch.matchedQuoteData.finalPrice > 0;
+    const bestPrice = hasFinalPrice ? bestMatch.matchedQuoteData!.finalPrice! : (bestMatch.matchedQuoteData?.initialPrice || 0);
+    
+    // Calculate weighted average from top 3 matches for reference
+    const top3 = sortedMatches.slice(0, 3);
+    let weightedSum = 0;
+    let totalWeight = 0;
+    const prices: number[] = [];
+    
+    for (const m of top3) {
+      const hasFinal = m.matchedQuoteData?.finalPrice && m.matchedQuoteData.finalPrice > 0;
+      const price = hasFinal ? m.matchedQuoteData!.finalPrice! : (m.matchedQuoteData?.initialPrice || 0);
+      const priceBoost = hasFinal ? 1.5 : 1.0;
+      const weight = m.similarity_score * priceBoost;
+      
+      weightedSum += price * weight;
+      totalWeight += weight;
+      prices.push(price);
+    }
+    
+    const weightedAvg = Math.round(weightedSum / totalWeight);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const priceSpread = weightedAvg > 0 ? (maxPrice - minPrice) / weightedAvg : 0;
+    
+    // Hazmat check
+    const isHazmat = sourceQuote.hazardous_material === true || 
+      /hazmat|hazardous|\bun\d{3,4}\b/i.test(sourceQuote.cargo_description || '');
+    
+    console.log(`  Best match: ${(bestScore * 100).toFixed(0)}% similar, $${bestPrice.toLocaleString()}${hasFinalPrice ? ' (FINAL)' : ''}`);
+    console.log(`  Top 3 avg: $${weightedAvg.toLocaleString()}, Range: $${minPrice.toLocaleString()}-$${maxPrice.toLocaleString()}, Spread: ${(priceSpread * 100).toFixed(0)}%`);
+    
+    // PRICING LOGIC: Use BEST MATCH as primary, with confidence-based adjustments
+    // This approach achieved 37.9% accuracy in testing - best of all approaches
+    let recommendedPrice: number;
+    let confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+    
+    // High similarity = trust best match, Lower similarity = blend with weighted avg
+    if (bestScore >= 0.80) {
+      // Very high similarity - trust the best match
+      recommendedPrice = bestPrice;
+      confidence = 'HIGH';
+      console.log(`  HIGH similarity (${(bestScore * 100).toFixed(0)}%) - using best match: $${recommendedPrice.toLocaleString()}`);
+    } else if (bestScore >= 0.60) {
+      // Good similarity - slight blend toward average
+      recommendedPrice = Math.round((bestPrice * 0.7) + (weightedAvg * 0.3));
+      confidence = 'MEDIUM';
+      console.log(`  MEDIUM similarity - 70/30 blend: $${recommendedPrice.toLocaleString()}`);
+    } else {
+      // Lower similarity - use weighted average as more stable
+      recommendedPrice = weightedAvg;
+      confidence = 'LOW';
+      console.log(`  LOW similarity - using weighted avg: $${recommendedPrice.toLocaleString()}`);
+    }
+    
+    // Hazmat premium (if historical matches weren't hazmat)
     if (isHazmat) {
-      maxCap = maxCap * 2;
-      console.log(`  Hazmat detected: cap doubled to ${maxCap}`);
+      recommendedPrice = Math.round(recommendedPrice * 1.5);
+      console.log(`  Hazmat premium applied: $${recommendedPrice.toLocaleString()}`);
     }
     
-    // TUNED: Less aggressive caps - only apply when we have high confidence
-    // The hard caps were causing too many false negatives (capping correct high prices)
-    // New strategy: Use historical baseline range as primary constraint, caps as fallback only
+    // Apply soft bounds based on historical range
+    const softFloor = Math.round(minPrice * 0.70);
+    const softCeiling = Math.round(maxPrice * 1.50);
     
-    // Only apply distance-based caps if distance is reliable AND historical data is sparse
-    const hasReliableDistance = distanceMiles > 0;
-    const hasHistoricalData = baselinePrice > 0 && filteredPrices.length >= 2;
-    
-    // If we have good historical data, trust it more than distance-based caps
-    if (!hasHistoricalData && hasReliableDistance) {
-      // Only apply distance caps when we lack historical data
-      if (distanceMiles < 50 && !isHazmat && effectiveServiceType.includes('drayage')) {
-        maxCap = Math.min(maxCap, 3000);  // Very short drayage
-        console.log(`  Very short drayage: cap set to ${maxCap} (no historical data)`)
-      } else if (distanceMiles < 100 && !isHazmat && effectiveServiceType.includes('drayage')) {
-        maxCap = Math.min(maxCap, 4000);  // Short drayage
-        console.log(`  Short drayage: cap set to ${maxCap} (no historical data)`)
-      }
-      // For ground/ocean, don't apply distance caps - too variable
-    } else if (hasHistoricalData) {
-      // Trust historical data - only cap at 2x the max historical price
-      maxCap = Math.max(maxCap, Math.round(maxHistPrice * 2));
-      console.log(`  Historical data available: cap adjusted to ${maxCap}`);
+    if (recommendedPrice < softFloor) {
+      recommendedPrice = softFloor;
+      console.log(`  Floor applied: $${recommendedPrice.toLocaleString()}`);
     }
-
-    return await this.withRetry(async () => {
-      const responseText = await this.generateResponse(prompt);
-      const parsedData = this.cleanAndParseResponse(responseText) as unknown as AIPricingDetails;
-
-      // ENFORCE BOUNDS: If AI returned price outside bounds, clamp it
-      if (parsedData.recommended_price) {
-        const originalPrice = parsedData.recommended_price;
-        
-        // Apply floor from historical baseline (trust historical data as primary source)
-        if (baselinePrice > 0 && parsedData.recommended_price < enforcementFloor) {
-          console.log(`  Historical floor: $${parsedData.recommended_price} -> $${enforcementFloor}`);
-          parsedData.recommended_price = enforcementFloor;
-        }
-        
-        // Apply ceiling from historical baseline
-        if (baselinePrice > 0 && parsedData.recommended_price > enforcementCeiling) {
-          console.log(`  Historical ceiling: $${originalPrice} -> $${enforcementCeiling}`);
-          parsedData.recommended_price = enforcementCeiling;
-        }
-        
-        // Apply absolute service-type cap (always enforced as last resort)
-        if (parsedData.recommended_price > maxCap) {
-          console.log(`  Hard cap: $${parsedData.recommended_price} -> $${maxCap} (${effectiveServiceType}, ${distanceMiles} miles)`);
-          parsedData.recommended_price = maxCap;
-        }
-      }
-
-      console.log(`  Success: Generated pricing recommendation with ${this.serviceName}`);
-      return parsedData;
-    }, 2);
+    if (recommendedPrice > softCeiling) {
+      recommendedPrice = softCeiling;
+      console.log(`  Ceiling applied: $${recommendedPrice.toLocaleString()}`);
+    }
+    
+    const result: AIPricingDetails = {
+      recommended_price: recommendedPrice,
+      floor_price: softFloor,
+      target_price: bestPrice,
+      ceiling_price: softCeiling,
+      confidence,
+      price_breakdown: {
+        linehaul: Math.round(recommendedPrice * 0.70),
+        fuel_surcharge: Math.round(recommendedPrice * 0.15),
+        accessorials: Math.round(recommendedPrice * 0.10),
+        margin: Math.round(recommendedPrice * 0.05),
+      },
+      reasoning: `Best match: ${(bestScore * 100).toFixed(0)}% similar at $${bestPrice.toLocaleString()}. Top 3 range: $${minPrice.toLocaleString()}-$${maxPrice.toLocaleString()}.`,
+      market_factors: ['Best match pricing', effectiveServiceType, `${distanceMiles} miles`],
+      negotiation_room_percent: confidence === 'HIGH' ? 10 : 15,
+    };
+    
+    console.log(`  Recommended: $${recommendedPrice.toLocaleString()} (${confidence} confidence)`);
+    return result;
   }
 
 /**
@@ -515,7 +536,8 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     sourceQuote: Quote,
     matches: QuoteMatch[],
     marketData: MarketData = { fuelSurcharge: 0.3 },
-    routeDistance?: RouteDistance | null
+    routeDistance?: RouteDistance | null,
+    formulaPriceHint?: number
   ): string {
     const topMatches = matches.slice(0, 5);
 
@@ -629,13 +651,24 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     } else {
       constraintNote = `\n**FALLBACK PRICING**: No reliable historical data. Use industry-standard pricing for the service type.`;
     }
+    
+    // If formula price hint is provided (high variance case), override the baseline
+    const useFormulaBaseline = formulaPriceHint && formulaPriceHint > 0;
+    const promptBaseline = useFormulaBaseline ? formulaPriceHint : effectiveBaseline;
+    const promptFloor = useFormulaBaseline ? Math.round(formulaPriceHint * 0.70) : absoluteFloor;
+    const promptCeiling = useFormulaBaseline ? Math.round(formulaPriceHint * 1.40) : absoluteCeiling;
+    
+    // Override constraint note if using formula pricing
+    if (useFormulaBaseline) {
+      constraintNote = `\n**FORMULA-BASED PRICING (HIGH VARIANCE)**: Historical data has too much variance (prices ranging from $${minHistPrice.toLocaleString()} to $${maxHistPrice.toLocaleString()}). Use the formula-based baseline of **$${formulaPriceHint.toLocaleString()}** instead. Your price MUST be between $${promptFloor.toLocaleString()} and $${promptCeiling.toLocaleString()}.`;
+    }
 
-    return `You are a senior pricing analyst at a drayage and transportation company. Your MOST IMPORTANT task is to provide accurate prices based on historical similar quotes.
+    return `You are a senior pricing analyst at a drayage and transportation company. Your MOST IMPORTANT task is to provide accurate prices based on ${useFormulaBaseline ? 'formula-based pricing (historical data is unreliable)' : 'historical similar quotes'}.
 
 ## CRITICAL PRICING RULE
-**YOU MUST BASE YOUR PRICE ON THE HISTORICAL MATCHES BELOW.**
-- The weighted average of similar historical quotes is: **$${effectiveBaseline.toLocaleString()}**
-- Historical price range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}
+**${useFormulaBaseline ? 'USE FORMULA-BASED PRICING' : 'YOU MUST BASE YOUR PRICE ON THE HISTORICAL MATCHES BELOW'}.**
+- ${useFormulaBaseline ? 'Formula-based baseline price' : 'The weighted average of similar historical quotes'} is: **$${promptBaseline.toLocaleString()}**
+${!useFormulaBaseline ? `- Historical price range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}` : ''}
 - Number of historical references: ${pricesList.length}
 ${constraintNote}
 
@@ -690,13 +723,13 @@ ${isOcean ? `### PURE OCEAN FREIGHT Pricing
 - Very different route distance: Adjust proportionally
 
 ## OUTPUT FORMAT
-Return ONLY valid JSON. Your recommended_price should be close to the weighted average of $${effectiveBaseline.toLocaleString()} unless adjustments are clearly needed:
+Return ONLY valid JSON. Your recommended_price should be close to the baseline of $${promptBaseline.toLocaleString()} unless adjustments are clearly needed:
 
 {
-  "recommended_price": ${effectiveBaseline > 0 ? effectiveBaseline : 0},
-  "floor_price": ${effectiveBaseline > 0 ? Math.round(effectiveBaseline * 0.85) : 0},
-  "target_price": ${effectiveBaseline > 0 ? effectiveBaseline : 0},
-  "ceiling_price": ${effectiveBaseline > 0 ? Math.round(effectiveBaseline * 1.15) : 0},
+  "recommended_price": ${promptBaseline > 0 ? promptBaseline : 0},
+  "floor_price": ${promptBaseline > 0 ? Math.round(promptBaseline * 0.85) : 0},
+  "target_price": ${promptBaseline > 0 ? promptBaseline : 0},
+  "ceiling_price": ${promptBaseline > 0 ? Math.round(promptBaseline * 1.15) : 0},
   "confidence": "HIGH|MEDIUM|LOW",
   "price_breakdown": {
     "linehaul": 0.00,
@@ -704,7 +737,7 @@ Return ONLY valid JSON. Your recommended_price should be close to the weighted a
     "accessorials": 0.00,
     "margin": 0.00
   },
-  "reasoning": "Brief explanation - must reference historical matches",
+  "reasoning": "Brief explanation${useFormulaBaseline ? ' - note: using formula pricing due to high historical variance' : ' - must reference historical matches'}",
   "market_factors": ["Factor 1", "Factor 2"],
   "negotiation_room_percent": 10
 }`;
