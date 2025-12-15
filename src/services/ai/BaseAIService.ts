@@ -534,17 +534,8 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const priceSpread = maxHistPrice > 0 ? (maxHistPrice - minHistPrice) / ((maxHistPrice + minHistPrice) / 2) : 0;
     const isReliableBaseline = baselinePrice > 100 && pricesList.length >= 2 && priceSpread < 1.0; // spread < 100% is reliable
     
-    // When spread is wide, use a more conservative baseline (lower quartile + weighted avg) / 2
-    // This prevents overpricing when historical data has high variance
-    let conservativeBaseline = baselinePrice;
-    if (!isReliableBaseline && pricesList.length >= 2) {
-      const sortedPrices = [...pricesList].sort((a, b) => a - b);
-      const lowerQuartileIdx = Math.floor(sortedPrices.length * 0.25);
-      const lowerQuartile = sortedPrices[lowerQuartileIdx] || sortedPrices[0] || baselinePrice;
-      conservativeBaseline = Math.round((lowerQuartile + baselinePrice) / 2);
-      console.log(`    Wide spread detected: Using conservative baseline $${conservativeBaseline} (was $${baselinePrice})`);
-    }
-    const effectiveBaseline = isReliableBaseline ? baselinePrice : conservativeBaseline;
+    // Use weighted average directly - conservative adjustment was too aggressive
+    const effectiveBaseline = baselinePrice;
 
     // Log the baseline calculation with outlier info
     const outlierCount = allPrices.length - filteredPrices.length;

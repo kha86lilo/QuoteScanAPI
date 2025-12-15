@@ -106,21 +106,21 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
 };
 
 // Enhanced Weights - adjusted for better pricing accuracy
-// Distance is CRITICAL for ground/drayage pricing - increased significantly
+// Balance between route matching and historical pricing reliability
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.06,
-  origin_city: 0.04,
-  destination_region: 0.08,
-  destination_city: 0.04,
-  cargo_category: 0.10,      // Cargo type impacts pricing
-  cargo_weight_range: 0.08,  // Weight significantly impacts price
+  origin_region: 0.07,
+  origin_city: 0.05,
+  destination_region: 0.09,
+  destination_city: 0.05,
+  cargo_category: 0.12,      // Cargo type impacts pricing
+  cargo_weight_range: 0.10,  // Weight significantly impacts price
   number_of_pieces: 0.03,
   service_type: 0.18,        // CRITICAL - avoid ocean/ground mixing
   service_compatibility: 0.06,
   hazmat: 0.05,
   container_type: 0.05,
   recency: 0.03,
-  distance_similarity: 0.20,  // INCREASED: Distance is critical for pricing accuracy
+  distance_similarity: 0.12,  // Distance matters but not overwhelming
 };
 
 const WEIGHT_RANGES: WeightRange[] = [
