@@ -374,8 +374,9 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     // First, apply absolute bounds to all prices
     let filtered = prices.filter(p => p >= absoluteMin && p <= absoluteMax);
     
-    // If we still have 3+ prices after absolute filtering, apply IQR
-    if (filtered.length >= 3) {
+    // If we still have 4+ prices after absolute filtering, apply IQR
+    // Increased threshold from 3 to 4 to be less aggressive
+    if (filtered.length >= 4) {
       const sorted = [...filtered].sort((a, b) => a - b);
       const q1Index = Math.floor(sorted.length * 0.25);
       const q3Index = Math.floor(sorted.length * 0.75);
@@ -383,14 +384,18 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
       const q3 = sorted[q3Index] || sorted[sorted.length - 1] || 0;
       const iqr = q3 - q1;
       
-      // Use 2x IQR for tighter outlier detection
-      const lowerBound = Math.max(absoluteMin, q1 - 2 * iqr);
-      const upperBound = Math.min(absoluteMax, q3 + 2 * iqr);
+      // Use 2.5x IQR for less aggressive outlier detection (was 2x)
+      const lowerBound = Math.max(absoluteMin, q1 - 2.5 * iqr);
+      const upperBound = Math.min(absoluteMax, q3 + 2.5 * iqr);
       
       filtered = filtered.filter(p => p >= lowerBound && p <= upperBound);
     }
     
-    // If filtering removed everything, return empty array (no valid baseline)
+    // If filtering removed everything, return the absolute-filtered prices instead
+    if (filtered.length === 0 && prices.length > 0) {
+      return prices.filter(p => p >= absoluteMin && p <= absoluteMax);
+    }
+    
     return filtered;
   }
 
@@ -468,10 +473,21 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const isShortHaul = distanceMiles > 0 && distanceMiles < 100;
     const isVeryShort = distanceMiles > 0 && distanceMiles < 50;
 
+    // Detect heavy cargo (over 40,000 lbs) - only trigger for very heavy cargo with explicit weight data
+    const cargoWeight = sourceQuote.cargo_weight || 0;
+    const weightUnit = (sourceQuote.weight_unit || '').toLowerCase();
+    const hasExplicitWeight = cargoWeight > 0 && weightUnit.length > 0;
+    const weightInLbs = weightUnit.includes('kg') ? cargoWeight * 2.205 : cargoWeight;
+    const isOversizeHeavy = hasExplicitWeight && weightInLbs > 40000;
+
     // Determine constraint level based on baseline reliability
     // For pure ocean, use lower price caps since ocean-only is typically $1,000-3,000
     let constraintNote = '';
-    if (isVeryShort && isDrayage) {
+    
+    // Heavy haul override - only for verified 40,000+ lbs cargo
+    if (isOversizeHeavy) {
+      constraintNote = `\n**HEAVY HAUL CONSTRAINT**: This cargo weighs ${weightInLbs.toLocaleString()} lbs (over 40,000 lbs). Heavy haul requires specialized equipment. Add 50-100% premium to baseline.`;
+    } else if (isVeryShort && isDrayage) {
       // Very short drayage should be capped very low
       constraintNote = `\n**SHORT-HAUL DRAYAGE CONSTRAINT**: This is a very short drayage move (${distanceMiles} miles). Short-haul drayage typically costs $400-800. You MUST return a price under $1,000 unless there are exceptional cargo requirements.`;
     } else if (isShortHaul && isDrayage) {
