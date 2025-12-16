@@ -1115,82 +1115,42 @@ async function getHistoricalQuotesForMatching(
       paramIndex++;
     }
 
-    // IMPROVED: Join with staff_quotes_replies to get actual pricing data
-    // This is more accurate than using initial_quote_amount which is often $0 or NULL
+    // Use staff_quotes_replies as primary source - these are actual quoted prices from staff
     const result = await client.query(
-      `WITH quote_prices AS (
-        SELECT 
-          q.quote_id,
-          q.client_company_name,
-          q.origin_city,
-          q.origin_state_province,
-          q.origin_country,
-          q.destination_city,
-          q.destination_state_province,
-          q.destination_country,
-          q.cargo_description,
-          q.cargo_weight,
-          q.weight_unit,
-          q.cargo_length,
-          q.cargo_width,
-          q.cargo_height,
-          q.dimension_unit,
-          q.number_of_pieces,
-          q.service_type,
-          q.service_level,
-          q.packaging_type,
-          q.hazardous_material,
-          -- Use MAX price from staff replies as the quote price (most complete/final)
-          MAX(sqr.quoted_price) as reply_price,
-          q.initial_quote_amount,
-          q.final_agreed_price,
-          q.job_won,
-          q.quote_status,
-          q.quote_date,
-          q.created_at
-        FROM shipping_quotes q
-        LEFT JOIN staff_quotes_replies sqr ON q.quote_id = sqr.related_quote_id
-          AND sqr.is_pricing_email = true
-          AND sqr.quoted_price IS NOT NULL
-          AND sqr.quoted_price >= 100
-          AND sqr.quoted_price <= 50000
-        WHERE q.origin_city IS NOT NULL
-          AND q.destination_city IS NOT NULL
-          ${excludeClause}
-        GROUP BY q.quote_id
-      )
-      SELECT 
-        quote_id,
-        client_company_name,
-        origin_city,
-        origin_state_province,
-        origin_country,
-        destination_city,
-        destination_state_province,
-        destination_country,
-        cargo_description,
-        cargo_weight,
-        weight_unit,
-        cargo_length,
-        cargo_width,
-        cargo_height,
-        dimension_unit,
-        number_of_pieces,
-        service_type,
-        service_level,
-        packaging_type,
-        hazardous_material,
-        -- Prefer reply_price, fallback to final_agreed_price, then initial_quote_amount
-        COALESCE(reply_price, final_agreed_price, initial_quote_amount) as initial_quote_amount,
-        COALESCE(reply_price, final_agreed_price) as final_agreed_price,
-        job_won,
-        quote_status,
-        quote_date,
-        created_at
-      FROM quote_prices
-      WHERE ${onlyWithPrice ? `COALESCE(reply_price, final_agreed_price, initial_quote_amount) >= 100
-        AND COALESCE(reply_price, final_agreed_price, initial_quote_amount) <= 50000` : '1=1'}
-      ORDER BY created_at DESC
+      `SELECT
+        sqr.related_quote_id as quote_id,
+        NULL as client_company_name,
+        sqr.origin_city,
+        sqr.origin_state as origin_state_province,
+        sqr.origin_country,
+        sqr.destination_city,
+        sqr.destination_state as destination_state_province,
+        sqr.destination_country,
+        sqr.cargo_description,
+        sqr.cargo_weight,
+        sqr.weight_unit,
+        NULL as cargo_length,
+        NULL as cargo_width,
+        NULL as cargo_height,
+        NULL as dimension_unit,
+        sqr.number_of_pieces,
+        sqr.service_type,
+        NULL as service_level,
+        NULL as packaging_type,
+        NULL as hazardous_material,
+        sqr.quoted_price as initial_quote_amount,
+        sqr.quoted_price as final_agreed_price,
+        NULL as job_won,
+        NULL as quote_status,
+        sqr.processed_at as quote_date,
+        sqr.processed_at as created_at
+      FROM staff_quotes_replies sqr
+      WHERE sqr.is_pricing_email = true
+        AND sqr.origin_city IS NOT NULL
+        AND sqr.destination_city IS NOT NULL
+        ${onlyWithPrice ? `AND sqr.quoted_price >= 100 AND sqr.quoted_price <= 50000` : ''}
+        ${excludeClause.replace('q.quote_id', 'sqr.related_quote_id')}
+      ORDER BY sqr.processed_at DESC
       LIMIT $${paramIndex}`,
       [...params, limit]
     );

@@ -305,6 +305,90 @@ Return complete, accurate JSON following this structure exactly.`;
     matches: QuoteMatch[],
     routeDistance?: RouteDistance | null
   ): Promise<AIPricingDetails | null> {
+    const normalizeText = (value: unknown): string => String(value ?? '').toLowerCase().trim();
+    const hasAny = (haystack: string, needles: string[]): boolean => needles.some((n) => haystack.includes(n));
+    const getState = (v: unknown): string => normalizeText(v).replace(/\./g, '').toUpperCase();
+    const toFiniteNumber = (value: unknown): number | null => {
+      if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+      }
+      if (typeof value === 'string') {
+        const cleaned = value.replace(/[$,\s]/g, '');
+        const parsed = Number(cleaned);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    };
+    const detectOversizeLikely = (q: Quote): boolean => {
+      const desc = normalizeText(q.cargo_description);
+      const dimsPattern = /\b\d{2,4}\s*(?:x|×)\s*\d{2,4}(?:\s*(?:x|×)\s*\d{2,4})?/i;
+      const hasDims = dimsPattern.test(desc);
+
+      // Word-boundary keyword detection to avoid substring false-positives (e.g. 'rg' in 'cargo')
+      const keywordPatterns: RegExp[] = [
+        /\boversize(?:d)?\b/i,
+        /\bover\s*size\b/i,
+        /\boverweight\b/i,
+        /\bover\s*weight\b/i,
+        /\bheavy\s*haul\b/i,
+        /\bheavyhaul\b/i,
+        /\blow\s*boy\b/i,
+        /\blowboy\b/i,
+        /\bstep\s*deck\b/i,
+        /\bstepdeck\b/i,
+        /\bflat\s*bed\b/i,
+        /\bflatbed\b/i,
+        /\bexcavator\b/i,
+        /\bbackhoe\b/i,
+        /\bbulldozer\b/i,
+        /\bdozer\b/i,
+        /\bcrane\b/i,
+        /\bforklift\b/i,
+        /\bskid\s*steer\b/i,
+        /\bcompactor\b/i,
+        /\bpress\s*brake\b/i,
+        /\btransformer\b/i,
+        /\bgenerator\b/i,
+        /\bkomatsu\b/i,
+        /\bcaterpillar\b/i,
+        /\bdaewoo\b/i,
+        /\bhamm\b/i,
+        /\bcat\b/i,
+      ];
+      const hasKeywords = keywordPatterns.some((re) => re.test(desc));
+
+      // NOTE: Weight alone is not a reliable oversize signal (commodity FTL can be heavy but not OSOW).
+      // Keep oversize detection focused on explicit OSOW language, dimensions, and equipment keywords.
+      return hasDims || hasKeywords;
+    };
+
+    const detectOversizeForPricingLikely = (q: Quote): boolean => {
+      const desc = normalizeText(q.cargo_description);
+      const dimsPattern = /\b\d{2,4}\s*(?:x|×)\s*\d{2,4}(?:\s*(?:x|×)\s*\d{2,4})?/i;
+      const hasDims = dimsPattern.test(desc);
+
+      // Strict OSOW/equipment signals only (avoid generic equipment words like excavator/backhoe)
+      const strictKeywordPatterns: RegExp[] = [
+        /\boversize(?:d)?\b/i,
+        /\bover\s*size\b/i,
+        /\boverweight\b/i,
+        /\bover\s*weight\b/i,
+        /\bosow\b/i,
+        /\bheavy\s*haul\b/i,
+        /\bheavyhaul\b/i,
+        /\blow\s*boy\b/i,
+        /\blowboy\b/i,
+        /\bstep\s*deck\b/i,
+        /\bstepdeck\b/i,
+        /\bflat\s*bed\b/i,
+        /\bflatbed\b/i,
+      ];
+      const hasStrictKeywords = strictKeywordPatterns.some((re) => re.test(desc));
+
+      // Weight alone is not a reliable OSOW indicator; keep this signal strict.
+      return hasDims || hasStrictKeywords;
+    };
+
     // Minimum price floors by service type - prices below this are outliers
     const minPriceFloors: Record<string, number> = {
       'drayage': 500,     // Min $500 for any drayage
@@ -315,12 +399,40 @@ Return complete, accurate JSON following this structure exactly.`;
     
     const serviceType = (sourceQuote.service_type || '').toLowerCase();
     const distanceMiles = routeDistance?.distanceMiles || 0;
+
+    const isPureOceanRequest = (() => {
+      const st = serviceType;
+      const oceanLike = (st === 'ocean' || st.includes('sea') || st.includes('fcl') || st.includes('lcl'));
+      if (!oceanLike) return false;
+      return !st.includes('drayage') && !st.includes('ground') && !st.includes('intermodal') && !st.includes('container');
+    })();
+
+    const oversizeLikely = detectOversizeLikely(sourceQuote);
+    const oversizeForPricing = detectOversizeForPricingLikely(sourceQuote);
+
+    const originCountry = normalizeText((sourceQuote as any).origin_country);
+    const destCountry = normalizeText((sourceQuote as any).destination_country);
+    const isUSCountry = (c: string): boolean => {
+      const v = c.replace(/\./g, '').trim();
+      return v === 'usa' || v === 'us' || v === 'united states' || v === 'u s a' || v === 'u s';
+    };
+    const isInternationalLane = (
+      (originCountry && destCountry && isUSCountry(originCountry) !== isUSCountry(destCountry)) ||
+      (!originCountry && !destCountry && distanceMiles > 2500)
+    );
     
     // Service type correction for short routes
     let effectiveServiceType = serviceType;
     if ((serviceType.includes('ocean') || serviceType.includes('intermodal')) && distanceMiles > 0 && distanceMiles < 150) {
-      effectiveServiceType = 'drayage';
-      console.log(`  Service correction: ${serviceType} -> drayage (${distanceMiles} miles)`);
+      // Short-distance moves with equipment/OSOW behave like specialized ground, not typical container drayage.
+      effectiveServiceType = oversizeLikely ? 'ground' : 'drayage';
+      console.log(`  Service correction: ${serviceType} -> ${effectiveServiceType} (${distanceMiles} miles)`);
+    }
+
+    // International "intermodal" labeling is often really ocean freight in this dataset
+    if (effectiveServiceType.includes('intermodal') && isInternationalLane && distanceMiles > 1000) {
+      effectiveServiceType = 'ocean';
+      console.log(`  Service correction: intermodal -> ocean (international lane)`);
     }
     
     // Get minimum price floor for this service type
@@ -331,11 +443,18 @@ Return complete, accurate JSON following this structure exactly.`;
         break;
       }
     }
+
+    // Service flags for downstream logic (after corrections)
+    const isDrayage = effectiveServiceType.includes('drayage');
+    const isGround = effectiveServiceType.includes('ground');
+    const isOcean = effectiveServiceType.includes('ocean');
+    const isIntermodal = effectiveServiceType.includes('intermodal');
     
     // Get matches with valid prices ABOVE the minimum floor
-    const validMatches = matches.filter(m => {
-      const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice;
-      return price && price >= minFloor;
+    const validMatches = matches.filter((m) => {
+      const raw = m.matchedQuoteData?.finalPrice ?? m.matchedQuoteData?.initialPrice;
+      const price = toFiniteNumber(raw);
+      return price !== null && price >= minFloor;
     });
     
     if (validMatches.length === 0) {
@@ -347,70 +466,435 @@ Return complete, accurate JSON following this structure exactly.`;
     const sortedMatches = [...validMatches].sort((a, b) => b.similarity_score - a.similarity_score);
     const bestMatch = sortedMatches[0]!;
     const bestScore = bestMatch.similarity_score;
+    const statusSuggestsFinal = (status: string): boolean => {
+      if (!status) return false;
+      return /\b(won|booked|accepted|agreed|final|closed|completed|paid)\b/i.test(status);
+    };
     const hasFinalPrice = bestMatch.matchedQuoteData?.finalPrice && bestMatch.matchedQuoteData.finalPrice > 0;
-    const bestPrice = hasFinalPrice ? bestMatch.matchedQuoteData!.finalPrice! : (bestMatch.matchedQuoteData?.initialPrice || 0);
+    const hasInitialPrice = bestMatch.matchedQuoteData?.initialPrice && bestMatch.matchedQuoteData.initialPrice > 0;
+    const bestFinal = hasFinalPrice ? toFiniteNumber(bestMatch.matchedQuoteData!.finalPrice!) : null;
+    const bestInitial = hasInitialPrice ? toFiniteNumber(bestMatch.matchedQuoteData!.initialPrice!) : null;
+    const bestStatus = normalizeText(bestMatch.matchedQuoteData?.status);
+    const bestFinalEqualsInitial = !!(bestFinal && bestInitial) && Math.abs(bestFinal - bestInitial) / Math.max(bestFinal, 1) <= 0.01;
+    const bestFinalReliable = !!bestFinal && statusSuggestsFinal(bestStatus) && !bestFinalEqualsInitial;
+    const bestPriceRaw = bestFinalReliable
+      ? bestMatch.matchedQuoteData!.finalPrice!
+      : (bestMatch.matchedQuoteData?.initialPrice || bestMatch.matchedQuoteData?.finalPrice || 0);
+    const bestPrice = toFiniteNumber(bestPriceRaw) ?? 0;
     
-    // Calculate weighted average from top 3 matches for reference
-    const top3 = sortedMatches.slice(0, 3);
+    // Calculate weighted average from top N matches for reference.
+    // With staff-reply sourced history, top-3 can be dominated by duplicated/priced-thread artifacts.
+    const topN = sortedMatches.slice(0, Math.min(12, sortedMatches.length));
     let weightedSum = 0;
     let totalWeight = 0;
     const prices: number[] = [];
+    const priceWeights: number[] = [];
+
+    // Dampen repeated identical/near-identical prices so duplicates don't dominate the baseline.
+    const bucketSize = 50;
+    const bucketCounts = new Map<number, number>();
     
-    for (const m of top3) {
+    for (const m of topN) {
       const hasFinal = m.matchedQuoteData?.finalPrice && m.matchedQuoteData.finalPrice > 0;
-      const price = hasFinal ? m.matchedQuoteData!.finalPrice! : (m.matchedQuoteData?.initialPrice || 0);
-      const priceBoost = hasFinal ? 1.5 : 1.0;
-      const weight = m.similarity_score * priceBoost;
+      const hasInitial = m.matchedQuoteData?.initialPrice && m.matchedQuoteData.initialPrice > 0;
+
+      const finalVal = hasFinal ? toFiniteNumber(m.matchedQuoteData!.finalPrice!) : null;
+      const initialVal = hasInitial ? toFiniteNumber(m.matchedQuoteData!.initialPrice!) : null;
+      const st = normalizeText(m.matchedQuoteData?.status);
+      const finalEqualsInitial = !!(finalVal && initialVal) && Math.abs(finalVal - initialVal) / Math.max(finalVal, 1) <= 0.01;
+      const finalReliable = !!finalVal && statusSuggestsFinal(st) && !finalEqualsInitial;
+
+      const priceRaw = finalReliable
+        ? m.matchedQuoteData!.finalPrice!
+        : (m.matchedQuoteData?.initialPrice || m.matchedQuoteData?.finalPrice || 0);
+      const price = toFiniteNumber(priceRaw) ?? 0;
+      if (!Number.isFinite(price) || price <= 0) continue;
+
+      const baseWeight = m.similarity_score;
+      const finalBoost = finalReliable ? 1.25 : 1.0;
+
+      const bucket = Math.round(price / bucketSize) * bucketSize;
+      const seen = bucketCounts.get(bucket) ?? 0;
+      bucketCounts.set(bucket, seen + 1);
+      const dupPenalty = 1 / Math.sqrt(1 + seen);
+
+      const weight = baseWeight * finalBoost * dupPenalty;
       
       weightedSum += price * weight;
       totalWeight += weight;
       prices.push(price);
+      priceWeights.push(weight);
+    }
+
+    if (prices.length === 0 || totalWeight <= 0 || !Number.isFinite(weightedSum)) {
+      console.log('  No usable priced matches after filtering');
+      return null;
     }
     
     const weightedAvg = Math.round(weightedSum / totalWeight);
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
     const priceSpread = weightedAvg > 0 ? (maxPrice - minPrice) / weightedAvg : 0;
+    const priceRatio = minPrice > 0 ? maxPrice / minPrice : Infinity;
+
+    // Trimmed mean guardrail: if the top price is an extreme outlier (>2x median), drop it from baseline calc
+    let trimmedWeightedAvg = weightedAvg;
+    if (prices.length >= 4) {
+      const sorted = [...prices].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)]!;
+      const top = sorted[sorted.length - 1]!;
+      if (median > 0 && top > 2 * median) {
+        const outlierIndex = prices.indexOf(top);
+        if (outlierIndex >= 0) {
+          const adjustedSum = weightedSum - (prices[outlierIndex] * priceWeights[outlierIndex]);
+          const adjustedWeight = totalWeight - priceWeights[outlierIndex];
+          if (adjustedWeight > 0) {
+            trimmedWeightedAvg = Math.round(adjustedSum / adjustedWeight);
+          }
+        }
+      }
+    }
+
+    // Guardrail: if spread is extreme (>150%), bias baseline toward lower anchors to avoid pulling high outliers
+    let adjustedWeightedAvg = trimmedWeightedAvg;
+    if (priceSpread > 1.5 && prices.length >= 4) {
+      const sorted = [...prices].sort((a, b) => a - b);
+      const q1Idx = Math.floor((sorted.length - 1) * 0.25);
+      const q2Idx = Math.floor((sorted.length - 1) * 0.50);
+      const q1 = sorted[q1Idx] ?? sorted[0];
+      const q2 = sorted[q2Idx] ?? sorted[Math.floor(sorted.length / 2)];
+      const lowerAnchor = Math.round(((q1 ?? sorted[0]) + (q2 ?? sorted[0])) / 2);
+      adjustedWeightedAvg = Math.round((trimmedWeightedAvg * 0.5) + (lowerAnchor * 0.5));
+    }
     
     // Hazmat check
     const isHazmat = sourceQuote.hazardous_material === true || 
       /hazmat|hazardous|\bun\d{3,4}\b/i.test(sourceQuote.cargo_description || '');
+
+    const cargoDescNorm = normalizeText(sourceQuote.cargo_description);
+    const cargoIsUnknown = !cargoDescNorm || ['unknown', 'n/a', 'na', 'not specified'].includes(cargoDescNorm);
     
-    console.log(`  Best match: ${(bestScore * 100).toFixed(0)}% similar, $${bestPrice.toLocaleString()}${hasFinalPrice ? ' (FINAL)' : ''}`);
-    console.log(`  Top 3 avg: $${weightedAvg.toLocaleString()}, Range: $${minPrice.toLocaleString()}-$${maxPrice.toLocaleString()}, Spread: ${(priceSpread * 100).toFixed(0)}%`);
+    console.log(`  Best match: ${(bestScore * 100).toFixed(0)}% similar, $${bestPrice.toLocaleString()}${bestFinalReliable ? ' (FINAL)' : ''}`);
+    console.log(`  Top ${Math.min(12, sortedMatches.length)} avg: $${weightedAvg.toLocaleString()}, Range: $${minPrice.toLocaleString()}-$${maxPrice.toLocaleString()}, Spread: ${(priceSpread * 100).toFixed(0)}%`);
     
     // PRICING LOGIC: Use BEST MATCH as primary, with confidence-based adjustments
     // This approach achieved 37.9% accuracy in testing - best of all approaches
     let recommendedPrice: number;
     let confidence: 'HIGH' | 'MEDIUM' | 'LOW';
-    
+
+    const sortedForAnchors = [...prices].sort((a, b) => a - b);
+    const q1 = sortedForAnchors[Math.floor((sortedForAnchors.length - 1) * 0.25)] ?? sortedForAnchors[0] ?? bestPrice;
+    const median = sortedForAnchors[Math.floor(sortedForAnchors.length / 2)] ?? q1;
+    let lowerQuartileAnchor = Math.round((q1 + median) / 2);
+    const isHighSpread = priceSpread > 1.2 || priceRatio > 2.5;
+
+    // Special handling: international ocean-like lanes can have a "cheap" historical tail.
+    // When spread is high and min is far below the median, bias strongly toward the low tail.
+    const internationalOceanLike = isInternationalLane && (effectiveServiceType.includes('ocean') || effectiveServiceType.includes('intermodal'));
+    const minTailIsMuchLower = minPrice > 0 && median > 0 && minPrice < (0.6 * median);
+    if (internationalOceanLike && isHighSpread && minTailIsMuchLower) {
+      lowerQuartileAnchor = Math.round((minPrice * 0.85) + (q1 * 0.15));
+    }
+
     // High similarity = trust best match, Lower similarity = blend with weighted avg
     if (bestScore >= 0.80) {
-      // Very high similarity - trust the best match
-      recommendedPrice = bestPrice;
-      confidence = 'HIGH';
-      console.log(`  HIGH similarity (${(bestScore * 100).toFixed(0)}%) - using best match: $${recommendedPrice.toLocaleString()}`);
+      // Very high similarity - trust the best match, unless the match set is wildly inconsistent
+      if (isHighSpread) {
+        const bestWeight = internationalOceanLike
+          ? (minTailIsMuchLower ? 0.35 : 0.45)
+          : 0.6;
+        const anchorWeight = 1 - bestWeight;
+        recommendedPrice = Math.round((bestPrice * bestWeight) + (lowerQuartileAnchor * anchorWeight));
+        confidence = 'MEDIUM';
+        console.log(`  HIGH similarity w/ HIGH spread - ${Math.round(bestWeight * 100)}/${Math.round(anchorWeight * 100)} toward lower anchor: $${recommendedPrice.toLocaleString()}`);
+      } else {
+        recommendedPrice = bestPrice;
+        confidence = 'HIGH';
+        console.log(`  HIGH similarity (${(bestScore * 100).toFixed(0)}%) - using best match: $${recommendedPrice.toLocaleString()}`);
+      }
     } else if (bestScore >= 0.60) {
-      // Good similarity - slight blend toward average
-      recommendedPrice = Math.round((bestPrice * 0.7) + (weightedAvg * 0.3));
-      confidence = 'MEDIUM';
-      console.log(`  MEDIUM similarity - 70/30 blend: $${recommendedPrice.toLocaleString()}`);
+      // Good similarity - blend; bias down when spread is large
+      if (isHighSpread) {
+        const bestWeight = internationalOceanLike
+          ? (minTailIsMuchLower ? 0.20 : 0.30)
+          : 0.5;
+        const anchorWeight = 1 - bestWeight;
+        recommendedPrice = Math.round((bestPrice * bestWeight) + (lowerQuartileAnchor * anchorWeight));
+        confidence = 'MEDIUM';
+        console.log(`  MEDIUM similarity w/ HIGH spread - ${Math.round(bestWeight * 100)}/${Math.round(anchorWeight * 100)} to lower anchor: $${recommendedPrice.toLocaleString()}`);
+      } else {
+        recommendedPrice = Math.round((bestPrice * 0.7) + (adjustedWeightedAvg * 0.3));
+        confidence = 'MEDIUM';
+        console.log(`  MEDIUM similarity - 70/30 blend: $${recommendedPrice.toLocaleString()}`);
+      }
     } else {
-      // Lower similarity - use weighted average as more stable
-      recommendedPrice = weightedAvg;
+      // Lower similarity - use baseline as more stable
+      recommendedPrice = adjustedWeightedAvg;
       confidence = 'LOW';
       console.log(`  LOW similarity - using weighted avg: $${recommendedPrice.toLocaleString()}`);
     }
+
+    // Guard against international ocean-like lanes being polluted by all-in staff-reply history.
+    // If the entire top-N price set has no "low tail" (min is still very high), infer that the prices
+    // likely include inland/drayage/other services and down-shift toward an ocean-only rate.
+    const applyOceanLikeGuard = internationalOceanLike && (isOcean || isIntermodal) && !isGround && !isDrayage;
+    let ignoreHistoricalSoftBounds = false;
+    if (applyOceanLikeGuard && !isHazmat && !oversizeForPricing) {
+      // Case A: no low tail at all -> derive an ocean-only estimate from the best match
+      if ((isPureOceanRequest || effectiveServiceType.includes('ocean')) && bestPrice >= 4000 && (
+        // If even the minimum is high, history is likely "all-in" (ocean + inland)
+        minPrice >= 3000 ||
+        // High-spread sets with a relatively high minimum often indicate duplicated/all-in staff reply artifacts
+        (isHighSpread && minPrice >= 2200) ||
+        // Unknown-cargo international lanes frequently have inflated historical mins (all-in staff replies)
+        (cargoIsUnknown && isHighSpread && minPrice >= 2000)
+      )) {
+        const factor = minPrice >= 3000 ? 0.25 : 0.30;
+        const oceanOnlyEstimate = Math.max(1200, Math.round(bestPrice * factor));
+        if (oceanOnlyEstimate < recommendedPrice) {
+          recommendedPrice = oceanOnlyEstimate;
+          confidence = 'LOW';
+          ignoreHistoricalSoftBounds = true;
+          console.log(`  Ocean-only contamination guard: ${(factor * 100).toFixed(0)}% of best match → $${recommendedPrice.toLocaleString()}`);
+        }
+      }
+
+      // Case B: there IS a low tail, but our recommendation is still pulled high -> bias toward Q1
+      if (q1 > 0 && q1 < 2800 && recommendedPrice > 3000) {
+        const biased = Math.round((recommendedPrice * 0.5) + (q1 * 0.5));
+        if (biased < recommendedPrice) {
+          recommendedPrice = biased;
+          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          console.log(`  Ocean-like down-bias toward Q1 ($${q1.toLocaleString()}): $${recommendedPrice.toLocaleString()}`);
+        }
+      }
+    }
+
+    // Low-price ground quotes without reliable FINAL prices can skew high once multipliers/ceilings apply.
+    // Keep this narrowly scoped to commodity/unknown cargo (avoid heavy equipment / OSOW cases).
+    if (isGround && !bestFinalReliable && bestScore >= 0.80 && recommendedPrice > 0 && recommendedPrice <= 1500) {
+      const cargoWeight = (sourceQuote.cargo_weight as number) || 0;
+      const weightUnit = normalizeText(sourceQuote.weight_unit);
+      const weightInLbs = weightUnit.includes('kg') ? cargoWeight * 2.205 : cargoWeight;
+      const isHeavyish = cargoWeight > 0 && weightInLbs > 10000;
+      const cargoDesc = (sourceQuote.cargo_description || '').toString();
+      const looksLikeMachinery = /\bmachinery\b|\bequipment\b|\bmachine\b|\bcompactor\b/i.test(cargoDesc);
+      if (!oversizeLikely && !oversizeForPricing && !looksLikeMachinery && !isHeavyish) {
+        recommendedPrice = Math.round(recommendedPrice * 0.85);
+        console.log(`  Non-final ground discount applied: $${recommendedPrice.toLocaleString()}`);
+      }
+    }
+
+    if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
+      const fallback = Number.isFinite(bestPrice) && bestPrice > 0 ? bestPrice : (adjustedWeightedAvg || weightedAvg);
+      recommendedPrice = Math.round(fallback);
+      confidence = 'LOW';
+      console.log(`  Pricing guard: non-finite recommendation; fallback → $${recommendedPrice.toLocaleString()}`);
+    }
+
+    // Service-specific multipliers to correct observed biases
+    const serviceMultipliers: Record<string, number> = {
+      drayage: 1.0,
+      ocean: 0.85,
+      intermodal: 0.85,
+      ground: 1.0,
+    };
+    const svcKey = effectiveServiceType || serviceType;
+    const svcMult = serviceMultipliers[svcKey] ?? 1.0;
+    if (svcMult !== 1.0) {
+      recommendedPrice = Math.round(recommendedPrice * svcMult);
+      console.log(`  Service multiplier (${svcKey}): x${svcMult} → $${recommendedPrice.toLocaleString()}`);
+    }
+
+    // International ocean-like lanes sourced from staff replies can be systematically "all-in".
+    // When the cargo description is missing/unknown, apply a conservative discount to avoid chronic overpricing.
+    if (internationalOceanLike && !ignoreHistoricalSoftBounds && cargoIsUnknown && !oversizeForPricing && !isHazmat && !isGround && !isDrayage) {
+      const intlDiscount = 0.70;
+      recommendedPrice = Math.round(recommendedPrice * intlDiscount);
+      confidence = 'LOW';
+      console.log(`  International ocean-like unknown-cargo discount: x${intlDiscount} → $${recommendedPrice.toLocaleString()}`);
+    }
+
+    // International reefer/container lanes are frequently ocean-only in this dataset (staff-reply history often looks all-in).
+    // Apply a targeted down-shift for explicit container/reefer signals to reduce chronic overpricing.
+    if (internationalOceanLike && !ignoreHistoricalSoftBounds && !isHazmat && !isGround && !isDrayage) {
+      const cargoDesc = normalizeText(sourceQuote.cargo_description);
+      const hasContainerSignal =
+        cargoDesc.includes('reefer') ||
+        cargoDesc.includes('container') ||
+        cargoDesc.includes('cntr') ||
+        /\b(?:20|40)\s*(?:ft|hc|high\s*cube)\b/i.test(cargoDesc);
+
+      if (hasContainerSignal) {
+        const containerDiscount = 0.70;
+        recommendedPrice = Math.round(recommendedPrice * containerDiscount);
+        confidence = 'LOW';
+        console.log(`  International container/reefer discount: x${containerDiscount} → $${recommendedPrice.toLocaleString()}`);
+      }
+    }
+
+    if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
+      const fallback = Number.isFinite(bestPrice) && bestPrice > 0 ? bestPrice : (adjustedWeightedAvg || weightedAvg);
+      recommendedPrice = Math.round(fallback);
+      confidence = 'LOW';
+      console.log(`  Pricing guard (post-multiplier): fallback → $${recommendedPrice.toLocaleString()}`);
+    }
+
     
     // Hazmat premium (if historical matches weren't hazmat)
     if (isHazmat) {
       recommendedPrice = Math.round(recommendedPrice * 1.5);
       console.log(`  Hazmat premium applied: $${recommendedPrice.toLocaleString()}`);
     }
+
+    if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
+      const fallback = Number.isFinite(bestPrice) && bestPrice > 0 ? bestPrice : (adjustedWeightedAvg || weightedAvg);
+      recommendedPrice = Math.round(fallback);
+      confidence = 'LOW';
+      console.log(`  Pricing guard (post-hazmat): fallback → $${recommendedPrice.toLocaleString()}`);
+    }
+
+    // Minimum floor for short-haul drayage to avoid excessive underpricing
+    if (isDrayage) {
+      const isShort = distanceMiles > 0 && distanceMiles <= 50;
+      if (isShort) {
+        // Allow a slightly lower floor when the historical baseline is clearly low
+        const histBaseline = adjustedWeightedAvg || weightedAvg;
+        const floor = histBaseline > 0 && histBaseline < 1200 ? 700 : 800;
+        recommendedPrice = Math.max(recommendedPrice, floor);
+      }
+    }
     
     // Apply soft bounds based on historical range
-    const softFloor = Math.round(minPrice * 0.70);
-    const softCeiling = Math.round(maxPrice * 1.50);
+    let softFloor = Math.round(minPrice * 0.70);
+    let softCeiling = Math.round(maxPrice * 1.50);
+
+    // If we inferred historical pricing contamination (e.g., all-in staff-reply prices for ocean-only),
+    // do NOT use historical min/max as hard bounds; keep bounds relative to the corrected recommendation.
+    if (ignoreHistoricalSoftBounds) {
+      const relFloor = Math.round(recommendedPrice * 0.75);
+      const relCeiling = Math.round(recommendedPrice * 1.35);
+      softFloor = Math.max(800, relFloor);
+      softCeiling = Math.max(softFloor + 200, relCeiling);
+    }
+
+    const isOversizeHeavy = (() => {
+      const cargoWeight = (sourceQuote.cargo_weight as number) || 0;
+      if (cargoWeight <= 0) return false;
+
+      const desc = normalizeText(sourceQuote.cargo_description);
+      const explicitLb = desc.includes(' lb') || desc.includes(' lbs') || desc.includes('pound');
+      const explicitKg = desc.includes(' kg') || desc.includes('kgs') || desc.includes('kilogram');
+      // Weight units from extracted fields are often unreliable; only treat as KG when explicitly stated in text.
+      const weightInLbs = explicitKg ? cargoWeight * 2.205 : cargoWeight;
+      return weightInLbs > 40000;
+    })();
+
+    // Short-haul equipment moves can be overpriced when a single high best-match dominates.
+    // For sub-200 mile ground equipment (without explicit OSOW), cap toward the historical baseline.
+    const equipmentWord = /\bmachinery\b|\bequipment\b|\bmachine\b|\bexcavator\b|\bbackhoe\b|\bdozer\b|\bbulldozer\b|\bloader\b|\bskid\s*steer\b|\bforklift\b|\bcompactor\b|\broller\b|\bgrader\b|\bpaver\b|\bcrane\b|\btelehandler\b|\btract(?:or|er)\b/i;
+    const equipmentLikelyShort = equipmentWord.test((sourceQuote.cargo_description || '').toString()) || oversizeLikely;
+    if (isGround && distanceMiles > 0 && distanceMiles <= 200 && equipmentLikelyShort && !oversizeForPricing && !isHazmat) {
+      const baseline = weightedAvg;
+      // Only cap when history is clearly in the low band (avoid capping legitimate OSOW moves).
+      if (baseline > 0 && baseline <= 2000 && recommendedPrice > baseline * 1.30) {
+        recommendedPrice = Math.round(baseline * 1.05);
+        if (confidence === 'HIGH') confidence = 'MEDIUM';
+        console.log(`  Short-haul equipment cap (ground): baseline $${baseline.toLocaleString()} → $${recommendedPrice.toLocaleString()}`);
+      }
+    }
+
+    // If this looks like machinery/OSOW on a non-trivial ground move, the historical top-N can be
+    // misleadingly low (e.g., partial quotes). Establish a minimum band and allow a higher ceiling.
+    const cargoDesc = (sourceQuote.cargo_description || '').toString();
+    const looksLikeMachinery = /\bmachinery\b|\bequipment\b|\bmachine\b|\bexcavator\b|\bbackhoe\b|\bdozer\b|\bbulldozer\b|\bskid\s*steer\b|\bloader\b|\bforklift\b|\bcompactor\b|\broller\b|\bgrader\b|\bpaver\b|\bcrane\b|\btelehandler\b|\btract(?:or|er)\b/i.test(cargoDesc);
+    const originCityForDistanceFallback = normalizeText((sourceQuote as any).origin_city);
+    const destCityForDistanceFallback = normalizeText((sourceQuote as any).destination_city);
+    const hasDistanceFallback = distanceMiles === 0 && !!originCityForDistanceFallback && !!destCityForDistanceFallback && originCityForDistanceFallback !== destCityForDistanceFallback;
+    if (isGround && (distanceMiles >= 200 || hasDistanceFallback)) {
+      const originStateLocal = getState((sourceQuote as any).origin_state_province ?? (sourceQuote as any).origin_state);
+      const destStateLocal = getState((sourceQuote as any).destination_state_province ?? (sourceQuote as any).destination_state);
+      const touchesNY = originStateLocal === 'NY' || destStateLocal === 'NY';
+      const isIntlGround = isInternationalLane && distanceMiles > 2500;
+      const equipmentLikely = looksLikeMachinery || oversizeLikely;
+
+      // Weight alone is often unreliable; require OSOW signal before applying the very high OSOW floor.
+      if (isOversizeHeavy && (oversizeForPricing || oversizeLikely)) {
+        const floor = distanceMiles >= 400 ? 4200 : 3500;
+        recommendedPrice = Math.max(recommendedPrice, floor);
+        softCeiling = Math.max(softCeiling, 9000);
+      }
+
+      if (oversizeForPricing && distanceMiles >= 250) {
+        // OSOW signals without truly heavy weight often price closer to standard specialized FTL.
+        const floor = distanceMiles >= 400 ? 3000 : 2600;
+        recommendedPrice = Math.max(recommendedPrice, floor);
+        softCeiling = Math.max(softCeiling, 8000);
+      }
+
+      if (looksLikeMachinery) {
+        // Machinery (including excavators) tends to price higher than commodity FTL, even if weight parsing is noisy.
+        const floor = distanceMiles >= 500 ? 3400 : (distanceMiles >= 350 ? 3300 : (distanceMiles >= 250 ? 3200 : 3000));
+        recommendedPrice = Math.max(recommendedPrice, floor);
+        softCeiling = Math.max(softCeiling, 7000);
+      }
+
+      // Targeted: equipment moves into/out of NY are frequently higher-cost.
+      if (touchesNY && equipmentLikely) {
+        const nyFloor = distanceMiles >= 250 ? 4200 : 3800;
+        recommendedPrice = Math.max(recommendedPrice, nyFloor);
+        softCeiling = Math.max(softCeiling, 9000);
+      }
+
+      // Targeted: international "ground"-labeled equipment moves should not price like domestic FTL.
+      if (isIntlGround && equipmentLikely) {
+        recommendedPrice = Math.max(recommendedPrice, 4500);
+        softCeiling = Math.max(softCeiling, 12000);
+      }
+
+      // Unknown cargo + very heavy weight often indicates specialized handling even when the description is blank.
+      if (cargoIsUnknown && isOversizeHeavy) {
+        recommendedPrice = Math.max(recommendedPrice, 5500);
+        softCeiling = Math.max(softCeiling, 10000);
+      }
+    }
+
+    // Additional caps for short-haul cases
+    const isDrayageShort = effectiveServiceType.includes('drayage') && distanceMiles > 0 && distanceMiles <= 50;
+    const isGroundShort = effectiveServiceType.includes('ground') && distanceMiles > 0 && distanceMiles <= 50;
+    const originState = getState((sourceQuote as any).origin_state_province ?? (sourceQuote as any).origin_state);
+    const destState = getState((sourceQuote as any).destination_state_province ?? (sourceQuote as any).destination_state);
+    const originCity = normalizeText((sourceQuote as any).origin_city);
+    const destCity = normalizeText((sourceQuote as any).destination_city);
+    const isNYNJ = (originState === 'NY' || originState === 'NJ' || destState === 'NY' || destState === 'NJ');
+    const isTX = (originState === 'TX' || destState === 'TX');
+    const isMetroNYNJ = isNYNJ && (hasAny(originCity, ['new york', 'newark', 'elizabeth', 'jersey', 'passaic', 'bergen', 'hillside']) || hasAny(destCity, ['new york', 'newark', 'elizabeth', 'jersey', 'passaic', 'bergen', 'hillside']));
+    const isMetroTX = isTX && (hasAny(originCity, ['houston', 'dallas', 'fort worth', 'austin', 'san antonio']) || hasAny(destCity, ['houston', 'dallas', 'fort worth', 'austin', 'san antonio']));
+    const isMetroDFW = isTX && (hasAny(originCity, ['dallas', 'fort worth']) || hasAny(destCity, ['dallas', 'fort worth']));
+
+    if (isDrayageShort && !oversizeForPricing && !oversizeLikely) {
+      const isVeryShort = distanceMiles > 0 && distanceMiles <= 20;
+      let cap = 1500;
+      if (isMetroNYNJ) {
+        // NY/NJ drayage has outliers; cap closer to the low quartile on very short moves.
+        cap = isVeryShort ? Math.min(1750, Math.max(1450, Math.round(q1 * 1.05))) : 2200;
+      } else if (isMetroDFW) {
+        cap = isVeryShort ? 850 : 950;
+      } else if (isMetroTX) {
+        cap = isVeryShort ? 1000 : 1300;
+      }
+      softCeiling = Math.min(softCeiling, cap);
+    }
+
+    // Medium drayage (50-80mi) in NY/NJ often has low actuals; cap toward the low tail to prevent 60-80% overpricing.
+    if (effectiveServiceType.includes('drayage') && distanceMiles > 50 && distanceMiles <= 80 && isNYNJ && !oversizeForPricing && !oversizeLikely) {
+      const cap = Math.max(1050, Math.round(q1 * 0.8));
+      softCeiling = Math.min(softCeiling, cap);
+    }
+    if (isGroundShort && !oversizeForPricing && !oversizeLikely) {
+      const isVeryShort = distanceMiles > 0 && distanceMiles <= 20;
+      softCeiling = Math.min(softCeiling, isVeryShort ? 1400 : 1500);
+    }
     
     if (recommendedPrice < softFloor) {
       recommendedPrice = softFloor;
@@ -419,6 +903,23 @@ Return complete, accurate JSON following this structure exactly.`;
     if (recommendedPrice > softCeiling) {
       recommendedPrice = softCeiling;
       console.log(`  Ceiling applied: $${recommendedPrice.toLocaleString()}`);
+    }
+
+    // Intermodal extreme pricing cap: prevent best-match pulling far above baseline
+    if (effectiveServiceType.includes('intermodal')) {
+      const extremeCap = Math.min(maxPrice, Math.round((adjustedWeightedAvg || weightedAvg) * 1.2));
+      if (recommendedPrice > extremeCap) {
+        recommendedPrice = extremeCap;
+        console.log(`  Intermodal extreme cap applied: $${recommendedPrice.toLocaleString()}`);
+      }
+    }
+
+    // If oversize is likely on ground, avoid underpricing.
+    // Keep this modest and avoid compounding with OSOW floors.
+    if (isGround && oversizeForPricing && recommendedPrice > 0 && recommendedPrice < 4000) {
+      const bump = isOversizeHeavy ? 1.15 : 1.08;
+      recommendedPrice = Math.round(recommendedPrice * bump);
+      console.log(`  Oversize keyword bump (ground): x${bump} → $${recommendedPrice.toLocaleString()}`);
     }
     
     const result: AIPricingDetails = {

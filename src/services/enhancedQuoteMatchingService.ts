@@ -53,14 +53,26 @@ const SERVICE_COMPATIBILITY: Record<string, string[]> = {
  * CRITICAL: Correct service type based on route distance
  * Ocean freight can't have 5-mile routes - that's clearly drayage
  */
-function correctServiceTypeByDistance(serviceType: string, distanceMiles: number | null | undefined, logCorrection: boolean = false): string {
+function correctServiceTypeByDistance(
+  serviceType: string,
+  distanceMiles: number | null | undefined,
+  logCorrection: boolean = false,
+  cargoDescription?: string | null
+): string {
   if (!distanceMiles || distanceMiles <= 0) return serviceType;
   
   const normalized = serviceType.toUpperCase();
+  const cargoLower = String(cargoDescription ?? '').toLowerCase();
+  const oversizeOrEquipmentLikely = /\b(oversize(?:d)?|over\s*size|overweight|over\s*weight|heavy\s*haul|oog|out\s*of\s*gauge|low\s*boy|lowboy|step\s*deck|stepdeck|flat\s*bed|flatbed|excavator|backhoe|bulldozer|dozer|crane|forklift|skid\s*steer|compactor|caterpillar|\bcat\b|komatsu|daewoo|hamm|press\s*brake|transformer|generator)\b/i.test(cargoLower);
   
   // If labeled Ocean/Intermodal but route is under 150 miles, it's actually drayage/ground
   // Real ocean routes are typically 500+ miles minimum (coastal to inland or trans-oceanic)
   if ((normalized === 'OCEAN' || normalized === 'INTERMODAL') && distanceMiles < 150) {
+    // Oversize/heavy equipment short-haul behaves like specialized ground (not typical container drayage).
+    if (oversizeOrEquipmentLikely) {
+      if (logCorrection) console.log(`    Service type correction: ${serviceType} -> GROUND (oversize/equipment on short route: ${distanceMiles} miles)`);
+      return 'GROUND';
+    }
     if (logCorrection) console.log(`    Service type correction: ${serviceType} -> DRAYAGE (distance: ${distanceMiles} miles too short for ocean)`);
     return 'DRAYAGE';
   }
@@ -112,19 +124,19 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
 // 3. Cargo category matters but not as much when we have good distance data
 // 4. Recency helps but don't overprioritize
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.08,       // Regional pricing differences
-  origin_city: 0.04,         // City helps for local knowledge
-  destination_region: 0.10,  // Destination affects pricing
-  destination_city: 0.04,    // City helps for local knowledge
-  cargo_category: 0.12,      // BALANCED - cargo matters but not dominant
-  cargo_weight_range: 0.10,  // Weight class affects equipment needed
-  number_of_pieces: 0.03,    // Piece count has small impact
-  service_type: 0.15,        // CRITICAL - different pricing models
+  origin_region: 0.08,
+  origin_city: 0.04,
+  destination_region: 0.10,
+  destination_city: 0.04,
+  cargo_category: 0.12,
+  cargo_weight_range: 0.08,
+  number_of_pieces: 0.03,
+  service_type: 0.14,
   service_compatibility: 0.04,
-  hazmat: 0.06,              // Hazmat is expensive
-  container_type: 0.04,      // Container type for ocean/drayage
-  recency: 0.06,             // Recent quotes are better
-  distance_similarity: 0.14, // IMPORTANT - distance drives fuel/labor costs
+  hazmat: 0.06,
+  container_type: 0.04,
+  recency: 0.06,
+  distance_similarity: 0.20,
 };
 
 const WEIGHT_RANGES: WeightRange[] = [
@@ -444,13 +456,28 @@ function calculateEnhancedSimilarity(
   const rawHistService = normalizeServiceType(historicalQuote.service_type);
   
   // Correct service types based on distance - prevents Ocean label on 5-mile routes
-  const sourceService = correctServiceTypeByDistance(rawSourceService, sourceDistance);
-  const histService = correctServiceTypeByDistance(rawHistService, historicalDistance);
+  const sourceService = correctServiceTypeByDistance(rawSourceService, sourceDistance, false, sourceQuote.cargo_description);
+  const histService = correctServiceTypeByDistance(rawHistService, historicalDistance, false, historicalQuote.cargo_description);
 
   criteria.service_type = sourceService === histService ? 1 : 0;
 
-  const compatible = SERVICE_COMPATIBILITY[sourceService] || [];
-  criteria.service_compatibility = compatible.includes(histService) ? 0.8 : 0;
+  const sourceIsShortHaul = (sourceDistance ?? 0) > 0 && (sourceDistance as number) < 150;
+
+  // For international lanes, OCEAN and INTERMODAL are often functionally interchangeable in historical labeling.
+  // Keep this strict for domestic lanes to avoid mixing different pricing models.
+  const isSourceIntl = (sourceOriginRegion && sourceOriginRegion !== 'USA') || (sourceDestRegion && sourceDestRegion !== 'USA');
+  const isHistIntl = (histOriginRegion && histOriginRegion !== 'USA') || (histDestRegion && histDestRegion !== 'USA');
+  const intlOceanIntermodalCompatible = isSourceIntl && isHistIntl && (
+    (sourceService === 'OCEAN' && histService === 'INTERMODAL') ||
+    (sourceService === 'INTERMODAL' && histService === 'OCEAN')
+  );
+
+  // Drayage pricing is extremely distance-sensitive; don't mix in longer-haul ground on short routes.
+  const compatible = (sourceService === 'DRAYAGE' && sourceIsShortHaul)
+    ? ['DRAYAGE']
+    : (SERVICE_COMPATIBILITY[sourceService] || []);
+
+  criteria.service_compatibility = (compatible.includes(histService) || intlOceanIntermodalCompatible) ? 0.8 : 0;
 
   const serviceScore = Math.max(criteria.service_type || 0, criteria.service_compatibility || 0);
   totalScore += serviceScore * (ENHANCED_WEIGHTS.service_type! + ENHANCED_WEIGHTS.service_compatibility!);
@@ -460,8 +487,9 @@ function calculateEnhancedSimilarity(
   const sourceCargoCat = classifyCargo(sourceQuote.cargo_description);
   const histCargoCat = classifyCargo(historicalQuote.cargo_description);
 
+  const neutralCargoCats = new Set(['GENERAL', 'UNKNOWN']);
   criteria.cargo_category = sourceCargoCat === histCargoCat ? 1 :
-                           (sourceCargoCat === 'GENERAL' || histCargoCat === 'GENERAL' ? 0.5 : 0);
+                           (neutralCargoCats.has(sourceCargoCat) || neutralCargoCats.has(histCargoCat) ? 0.5 : 0);
 
   totalScore += (criteria.cargo_category || 0) * ENHANCED_WEIGHTS.cargo_category!;
   totalWeight += ENHANCED_WEIGHTS.cargo_category!;
@@ -691,6 +719,16 @@ function findEnhancedMatches(
 ): ExtendedQuoteMatch[] {
   const { minScore = 0.45, maxMatches = 10, feedbackData } = options;
 
+  // Per-service minimum similarity thresholds to reduce weak/biased matches
+  const SERVICE_MIN_SCORE: Record<string, number> = {
+    DRAYAGE: 0.55,
+    OCEAN: 0.50,
+    INTERMODAL: 0.50,
+    GROUND: 0.45,
+  };
+  const normalizedService = normalizeServiceType(sourceQuote.service_type);
+  const effectiveMinScore = Math.max(minScore, SERVICE_MIN_SCORE[normalizedService] ?? minScore);
+
   const matches: ExtendedQuoteMatch[] = [];
 
   for (const historical of historicalQuotes) {
@@ -711,7 +749,7 @@ function findEnhancedMatches(
     // Apply feedback boost to the score (capped at 1.0)
     const adjustedScore = Math.min(1.0, score + feedbackBoost);
 
-    if (adjustedScore >= minScore) {
+    if (adjustedScore >= effectiveMinScore) {
       const priceInfo = suggestPriceEnhanced(historical, adjustedScore, sourceQuote);
 
       // Adjust price confidence based on feedback
