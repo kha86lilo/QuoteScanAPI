@@ -754,6 +754,27 @@ Return complete, accurate JSON following this structure exactly.`;
       console.log(`  Pricing guard (post-hazmat): fallback → $${recommendedPrice.toLocaleString()}`);
     }
 
+    // Multi-container drayage moves should scale above single-container baselines.
+    // Staff-reply history often mixes per-container and total pricing; keep this conservative.
+    if (isDrayage && distanceMiles > 0 && distanceMiles <= 60) {
+      const desc = (sourceQuote.cargo_description || '').toString();
+      const norm = normalizeText(desc);
+      const m1 = norm.match(/\b(\d{1,2})\s*(?:x|×)\s*(?:20|40)\s*'?\s*(?:hc|high\s*cube)?\b/);
+      const m2 = norm.match(/\b(\d{1,2})\s*(?:x|×)\s*(?:20|40)\s*'?\s*containers?\b/);
+      const m3 = norm.match(/\b(\d{1,2})\s*containers?\b/);
+      const count = Math.max(
+        m1 ? parseInt(m1[1]!, 10) : 0,
+        m2 ? parseInt(m2[1]!, 10) : 0,
+        m3 ? parseInt(m3[1]!, 10) : 0
+      );
+      if (count >= 3) {
+        const mult = count >= 5 ? 1.35 : 1.25;
+        recommendedPrice = Math.round(recommendedPrice * mult);
+        if (confidence === 'HIGH') confidence = 'MEDIUM';
+        console.log(`  Multi-container drayage multiplier (${count}): x${mult} → $${recommendedPrice.toLocaleString()}`);
+      }
+    }
+
     // Minimum floor for short-haul drayage to avoid excessive underpricing
     if (isDrayage) {
       const isShort = distanceMiles > 0 && distanceMiles <= 50;
