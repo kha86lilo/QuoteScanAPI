@@ -6,7 +6,7 @@
 import dotenv from 'dotenv';
 import type { Email, ParsedEmailData, Quote, QuoteMatch, AIPricingDetails, PricingReplyResult } from '../../types/index.js';
 import type { RouteDistance } from '../googleMapsService.js';
-import { PRICING_REPLY_EXTRACTION_PROMPT } from '../../prompts/shippingQuotePrompts.js';
+import { PRICING_REPLY_EXTRACTION_PROMPT, getPromptForTask } from '../../prompts/shippingQuotePrompts.js';
 dotenv.config();
 
 interface BatchParseResult {
@@ -1380,22 +1380,22 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
       const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice;
       return price && price > 0;
     });
-    
+
     // Extract all prices first
     let allPrices: number[] = [];
     for (const m of validMatches) {
       const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice || 0;
       allPrices.push(price);
     }
-    
+
     // Filter out outliers before computing baseline
     const filteredPrices = this.filterPriceOutliers(allPrices);
-    
+
     // Now compute weighted average only from non-outlier prices
     let weightedAvgPrice = 0;
     let totalWeight = 0;
     let pricesList: number[] = [];
-    
+
     for (const m of validMatches) {
       const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice || 0;
       // Only include if price wasn't filtered as outlier
@@ -1406,7 +1406,7 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
         pricesList.push(price);
       }
     }
-    
+
     const baselinePrice = totalWeight > 0 ? Math.round(weightedAvgPrice / totalWeight) : 0;
     const minHistPrice = pricesList.length > 0 ? Math.min(...pricesList) : 0;
     const maxHistPrice = pricesList.length > 0 ? Math.max(...pricesList) : 0;
@@ -1414,7 +1414,7 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     // Check if historical range is reliable (not too wide)
     const priceSpread = maxHistPrice > 0 ? (maxHistPrice - minHistPrice) / ((maxHistPrice + minHistPrice) / 2) : 0;
     const isReliableBaseline = baselinePrice > 100 && pricesList.length >= 2 && priceSpread < 1.0; // spread < 100% is reliable
-    
+
     // Use weighted average directly - conservative adjustment was too aggressive
     const effectiveBaseline = baselinePrice;
 
@@ -1422,19 +1422,9 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const outlierCount = allPrices.length - filteredPrices.length;
     console.log(`    Historical prices: ${allPrices.length} total, ${outlierCount} outliers filtered, Baseline: $${effectiveBaseline.toLocaleString()}, Range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}, Reliable: ${isReliableBaseline}`);
 
-    // Build distance info section if available
-    const distanceInfo = routeDistance
-      ? `- **Route Distance**: ${routeDistance.distanceMiles} miles (${routeDistance.distanceKm} km)
-- **Estimated Transit Time**: ${routeDistance.durationText}`
-      : '';
-
     // Detect service type for pricing guidance
     const serviceType = (sourceQuote.service_type || '').toLowerCase();
-    const isPureOcean = (serviceType === 'ocean' || serviceType === 'sea freight' || serviceType === 'fcl' || serviceType === 'lcl') 
-                        && !serviceType.includes('drayage') && !serviceType.includes('ground') && !serviceType.includes('intermodal');
-    const isOcean = serviceType.includes('ocean') || serviceType.includes('sea') || serviceType.includes('fcl') || serviceType.includes('lcl');
     const isDrayage = serviceType.includes('drayage') || serviceType.includes('container');
-    const isIntermodal = serviceType.includes('intermodal') || serviceType.includes('multimodal');
 
     // Detect short-haul moves (under 100 miles)
     const distanceMiles = routeDistance?.distanceMiles || 0;
@@ -1447,65 +1437,74 @@ Analyze the above email and return ONLY valid JSON (no markdown, no explanation)
     const hasExplicitWeight = cargoWeight > 0 && weightUnit.length > 0;
     const weightInLbs = weightUnit.includes('kg') ? cargoWeight * 2.205 : cargoWeight;
     const isOversizeHeavy = hasExplicitWeight && weightInLbs > 40000;
-    
+
     // Detect hazardous materials - significant price premium
-    const isHazmat = sourceQuote.hazardous_material === true || 
+    const isHazmat = sourceQuote.hazardous_material === true ||
       (sourceQuote.cargo_description || '').toLowerCase().includes('hazmat') ||
       (sourceQuote.cargo_description || '').toLowerCase().includes('hazardous') ||
       !!(sourceQuote.cargo_description || '').toLowerCase().match(/\bun\d{3,4}\b/);
 
     // Determine constraint level based on baseline reliability
-    // MUCH STRICTER: Always enforce maximum deviation from baseline
     let constraintNote = '';
-    
-    // Calculate absolute bounds based on effective baseline - NEVER deviate more than 50% from reliable baseline
-    // For hazmat, multiply bounds by 2-3x since historical matches may not be hazmat
+
+    // Calculate absolute bounds based on effective baseline
     const hazmatMultiplier = isHazmat ? 2.5 : 1.0;
     const absoluteFloor = isReliableBaseline ? Math.round(minHistPrice * 0.80 * hazmatMultiplier) : Math.round(effectiveBaseline * 0.50 * hazmatMultiplier);
     const absoluteCeiling = isReliableBaseline ? Math.round(maxHistPrice * 1.25 * hazmatMultiplier) : Math.round(effectiveBaseline * 2.0 * hazmatMultiplier);
-    
+
     // Hazmat override - highest priority
     if (isHazmat) {
-      constraintNote = `\n**HAZMAT CONSTRAINT (CRITICAL)**: This is hazardous materials cargo requiring special handling, permits, and compliance. HAZMAT adds 100-200% premium to standard rates. Your recommended price MUST be between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Historical matches may NOT be hazmat - apply appropriate premium.`;
+      constraintNote = `\n**HAZMAT CONSTRAINT (CRITICAL)**: This is hazardous materials cargo. HAZMAT adds 100-200% premium. Price MUST be between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}.`;
     } else if (isOversizeHeavy) {
-      constraintNote = `\n**HEAVY HAUL CONSTRAINT**: This cargo weighs ${weightInLbs.toLocaleString()} lbs (over 40,000 lbs). Heavy haul requires specialized equipment. Add 30-50% premium to baseline.`;
+      constraintNote = `\n**HEAVY HAUL CONSTRAINT**: Cargo weighs ${weightInLbs.toLocaleString()} lbs. Add 30-50% premium to baseline.`;
     } else if (isVeryShort && isDrayage) {
-      // Very short drayage should be capped very low
-      constraintNote = `\n**SHORT-HAUL DRAYAGE CONSTRAINT**: This is a very short drayage move (${distanceMiles} miles). Short-haul drayage typically costs $400-800. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${Math.min(absoluteCeiling, 1500).toLocaleString()}.`;
+      constraintNote = `\n**SHORT-HAUL DRAYAGE CONSTRAINT**: Very short move (${distanceMiles} miles). Price between $${absoluteFloor.toLocaleString()} and $${Math.min(absoluteCeiling, 1500).toLocaleString()}.`;
     } else if (isShortHaul && isDrayage) {
-      // Short drayage moves have specific pricing
-      constraintNote = `\n**LOCAL DRAYAGE CONSTRAINT**: This is a short local drayage move (${distanceMiles} miles). Local drayage typically costs $500-1,500. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${Math.min(absoluteCeiling, 2500).toLocaleString()}.`;
-    } else if (isPureOcean) {
-      // Pure ocean freight should be capped lower - typical rates are $1,000-3,500 per container
-      constraintNote = `\n**OCEAN-ONLY CONSTRAINT**: This is PURE ocean freight (no drayage/delivery). You MUST return a price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}.`;
+      constraintNote = `\n**LOCAL DRAYAGE CONSTRAINT**: Short local move (${distanceMiles} miles). Price between $${absoluteFloor.toLocaleString()} and $${Math.min(absoluteCeiling, 2500).toLocaleString()}.`;
     } else if (isReliableBaseline) {
-      constraintNote = `\n**STRICT CONSTRAINT (ENFORCED)**: Historical data is reliable. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Do NOT exceed these bounds.`;
+      constraintNote = `\n**STRICT CONSTRAINT**: Price MUST be between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}.`;
     } else if (effectiveBaseline > 0) {
-      constraintNote = `\n**MODERATE CONSTRAINT**: Historical data has variance. You MUST return a price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Stay close to baseline of $${effectiveBaseline.toLocaleString()}.`;
-    } else {
-      constraintNote = `\n**FALLBACK PRICING**: No reliable historical data. Use industry-standard pricing for the service type.`;
+      constraintNote = `\n**MODERATE CONSTRAINT**: Price between $${absoluteFloor.toLocaleString()} and $${absoluteCeiling.toLocaleString()}. Stay close to baseline of $${effectiveBaseline.toLocaleString()}.`;
     }
-    
+
     // If formula price hint is provided (high variance case), override the baseline
     const useFormulaBaseline = formulaPriceHint && formulaPriceHint > 0;
     const promptBaseline = useFormulaBaseline ? formulaPriceHint : effectiveBaseline;
     const promptFloor = useFormulaBaseline ? Math.round(formulaPriceHint * 0.70) : absoluteFloor;
     const promptCeiling = useFormulaBaseline ? Math.round(formulaPriceHint * 1.40) : absoluteCeiling;
-    
+
     // Override constraint note if using formula pricing
     if (useFormulaBaseline) {
-      constraintNote = `\n**FORMULA-BASED PRICING (HIGH VARIANCE)**: Historical data has too much variance (prices ranging from $${minHistPrice.toLocaleString()} to $${maxHistPrice.toLocaleString()}). Use the formula-based baseline of **$${formulaPriceHint.toLocaleString()}** instead. Your price MUST be between $${promptFloor.toLocaleString()} and $${promptCeiling.toLocaleString()}.`;
+      constraintNote = `\n**FORMULA-BASED PRICING**: Historical data has high variance ($${minHistPrice.toLocaleString()} to $${maxHistPrice.toLocaleString()}). Use formula baseline of **$${formulaPriceHint.toLocaleString()}**. Price MUST be between $${promptFloor.toLocaleString()} and $${promptCeiling.toLocaleString()}.`;
     }
 
-    return `You are a senior pricing analyst at a drayage and transportation company. Your MOST IMPORTANT task is to provide accurate prices based on ${useFormulaBaseline ? 'formula-based pricing (historical data is unreliable)' : 'historical similar quotes'}.
+    // Format historical matches for prompt context
+    const historicalMatchesForPrompt = topMatches.map((m, i) => ({
+      matchNumber: i + 1,
+      similarityScore: m.similarity_score,
+      route: {
+        origin: m.matchedQuoteData?.origin || 'Unknown',
+        destination: m.matchedQuoteData?.destination || 'Unknown',
+      },
+      service: m.matchedQuoteData?.service || 'Unknown',
+      cargo: m.matchedQuoteData?.cargo || 'Not specified',
+      finalPrice: m.matchedQuoteData?.finalPrice || null,
+      initialPrice: m.matchedQuoteData?.initialPrice || null,
+      quoteDate: m.matchedQuoteData?.quoteDate || null,
+      status: m.matchedQuoteData?.status || 'Unknown',
+    }));
 
-## CRITICAL PRICING RULE
-**${useFormulaBaseline ? 'USE FORMULA-BASED PRICING' : 'YOU MUST BASE YOUR PRICE ON THE HISTORICAL MATCHES BELOW'}.**
-- ${useFormulaBaseline ? 'Formula-based baseline price' : 'The weighted average of similar historical quotes'} is: **$${promptBaseline.toLocaleString()}**
-${!useFormulaBaseline ? `- Historical price range: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}` : ''}
-- Number of historical references: ${pricesList.length}
-${constraintNote}
+    // Use centralized prompt from getPromptForTask with historical matches context
+    const basePrompt = getPromptForTask('recommend_price', {
+      historicalMatches: historicalMatchesForPrompt,
+    });
 
+    // Build quote details section
+    const distanceInfo = routeDistance
+      ? `- **Route Distance**: ${routeDistance.distanceMiles} miles (${routeDistance.distanceKm} km)\n- **Estimated Transit Time**: ${routeDistance.durationText}`
+      : '';
+
+    const quoteDetails = `
 ## QUOTE REQUEST TO PRICE
 - **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}
 ${distanceInfo}
@@ -1516,48 +1515,14 @@ ${distanceInfo}
 - **Dimensions**: ${sourceQuote.cargo_length ? `${sourceQuote.cargo_length} x ${sourceQuote.cargo_width} x ${sourceQuote.cargo_height} ${sourceQuote.dimension_unit || ''}` : 'Not specified'}
 - **Hazmat**: ${sourceQuote.hazardous_material ? 'Yes' : 'No'}
 
-## SIMILAR HISTORICAL QUOTES - USE THESE AS YOUR PRIMARY REFERENCE
-${topMatches.map((m, i) => {
-  const price = m.matchedQuoteData?.finalPrice || m.matchedQuoteData?.initialPrice;
-  const priceLabel = m.matchedQuoteData?.finalPrice ? 'FINAL AGREED PRICE' : 'Initial Quote';
-  return `
-### Match ${i + 1} (${(m.similarity_score * 100).toFixed(0)}% similar)
-- Route: ${m.matchedQuoteData?.origin || 'Unknown'} → ${m.matchedQuoteData?.destination || 'Unknown'}
-- Service: ${m.matchedQuoteData?.service || 'Unknown'}
-- Cargo: ${m.matchedQuoteData?.cargo || 'Not specified'}
-- **${priceLabel}: $${price?.toLocaleString() || 'N/A'}** ${m.matchedQuoteData?.finalPrice ? '← Use this as primary reference' : ''}
-- Date: ${m.matchedQuoteData?.quoteDate ? new Date(m.matchedQuoteData.quoteDate).toLocaleDateString() : 'Unknown'}
-- Status: ${m.matchedQuoteData?.status || 'Unknown'}`;
-}).join('\n')}
-
-## ADJUSTMENT GUIDELINES (Only apply when CLEARLY justified)
-${isOcean ? `### PURE OCEAN FREIGHT Pricing
-**CRITICAL**: This is OCEAN-ONLY freight. Ocean freight rates are typically:
-- Europe to US East Coast: $1,000 - $3,000 per container (FCL)
-- Asia to US West Coast: $1,500 - $4,000 per container (FCL)
-- LCL rates: $80-150 per CBM
-- DO NOT add drayage or ground transport costs - this is ocean-only
-- If historical matches show much higher prices, they may include additional services` : isIntermodal ? `### Intermodal (Multi-modal) Pricing
-- This includes multiple services (ocean + drayage, rail + truck, etc.)
-- Price includes port handling, customs coordination, and ground delivery
-- Typically 50-100% higher than ocean-only rates` : isDrayage ? `### Drayage Pricing
-- Short local moves (0-30 miles): $300-600
-- Local (30-100 miles): $500-1,000
-- Regional (100-250 miles): $800-1,500
-- Extended (250+ miles): Consider FTL rates` : `### Ground Transportation
-- Per-mile rates: $2.50-4.00 for standard FTL
-- Equipment premiums: Flatbed +15-25%, Step-deck +10-20%
-- Fuel surcharge: ~25-35% of linehaul`}
-
-## ADJUSTMENT REASONS (Only adjust if applicable)
-- OOG/Oversize cargo: +35-50%
-- Hazmat: +25-40%
-- Expedited/Rush: +25-50%
-- More pieces/higher weight than historical: Adjust proportionally
-- Very different route distance: Adjust proportionally
+## PRICING CONSTRAINTS
+- **Baseline Price**: $${promptBaseline.toLocaleString()}
+- **Historical Price Range**: $${minHistPrice.toLocaleString()} - $${maxHistPrice.toLocaleString()}
+- **Number of Historical References**: ${pricesList.length}
+${constraintNote}
 
 ## OUTPUT FORMAT
-Return ONLY valid JSON. Your recommended_price should be close to the baseline of $${promptBaseline.toLocaleString()} unless adjustments are clearly needed:
+Return ONLY valid JSON:
 
 {
   "recommended_price": ${promptBaseline > 0 ? promptBaseline : 0},
@@ -1571,9 +1536,13 @@ Return ONLY valid JSON. Your recommended_price should be close to the baseline o
     "accessorials": 0.00,
     "margin": 0.00
   },
-  "reasoning": "Brief explanation${useFormulaBaseline ? ' - note: using formula pricing due to high historical variance' : ' - must reference historical matches'}",
+  "reasoning": "Brief explanation referencing historical matches",
   "market_factors": ["Factor 1", "Factor 2"],
   "negotiation_room_percent": 10
 }`;
+
+    return `${basePrompt}
+
+${quoteDetails}`;
   }
 }

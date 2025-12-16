@@ -7,6 +7,7 @@ import * as db from '../config/db.js';
 import type { QuoteFeedbackData } from '../config/db.js';
 import { getAIService } from './ai/aiServiceFactory.js';
 import { calculateQuoteDistance, type RouteDistance } from './googleMapsService.js';
+import { getPromptForTask } from '../prompts/shippingQuotePrompts.js';
 import type {
   Quote,
   QuoteMatch,
@@ -815,8 +816,79 @@ async function getAIPricingRecommendation(
 
   try {
     const aiService = getAIService();
-    const recommendation = await aiService.getPricingRecommendation(sourceQuote, matches, routeDistance);
-    return recommendation;
+
+    // First get the algorithmic recommendation as a baseline
+    const algorithmicRecommendation = await aiService.getPricingRecommendation(sourceQuote, matches, routeDistance);
+
+    // Generate the AI pricing prompt using centralized getPromptForTask
+    const pricingPrompt = generatePricingPrompt(sourceQuote, matches, routeDistance, algorithmicRecommendation);
+
+    // Try to get AI-enhanced recommendation
+    try {
+      const aiResponse = await aiService.generateResponse(pricingPrompt);
+
+      // Parse the AI response - it may return structured recommendations
+      if (aiResponse) {
+        const extractJsonObject = (text: string): string | null => {
+          const start = text.indexOf('{');
+          if (start < 0) return null;
+          let depth = 0;
+          for (let i = start; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === '{') depth++;
+            if (ch === '}') {
+              depth--;
+              if (depth === 0) {
+                return text.slice(start, i + 1);
+              }
+            }
+          }
+          return null;
+        };
+
+        const jsonCandidate = extractJsonObject(aiResponse);
+        if (jsonCandidate) {
+          try {
+            const parsed = JSON.parse(jsonCandidate) as any;
+            const aiInitial = parsed?.recommended_quote?.initial_amount;
+            const aiSuggestedPriceRaw = typeof aiInitial === 'number' ? aiInitial : Number(String(aiInitial ?? '').replace(/[$,\s]/g, ''));
+            const aiSuggestedPrice = Number.isFinite(aiSuggestedPriceRaw) ? Math.round(aiSuggestedPriceRaw) : NaN;
+
+            if (Number.isFinite(aiSuggestedPrice) && aiSuggestedPrice > 0 && algorithmicRecommendation?.recommended_price) {
+              const floor = algorithmicRecommendation.floor_price ?? null;
+              const ceiling = algorithmicRecommendation.ceiling_price ?? null;
+
+              // Guardrails: the AI must stay close to the algorithmic band; otherwise we clamp.
+              const guardedAi = (floor && ceiling)
+                ? Math.round(Math.min(ceiling, Math.max(floor, aiSuggestedPrice)))
+                : aiSuggestedPrice;
+
+              // Use weighted blend: 85% algorithmic (more reliable), 15% AI suggestion
+              const blendedPrice = Math.round(
+                (algorithmicRecommendation.recommended_price * 0.85) + (guardedAi * 0.15)
+              );
+
+              console.log(
+                `    AI-enhanced pricing: Algorithmic $${algorithmicRecommendation.recommended_price.toLocaleString()}, AI suggested $${aiSuggestedPrice.toLocaleString()}, Guarded $${guardedAi.toLocaleString()}, Blended $${blendedPrice.toLocaleString()}`
+              );
+
+              return {
+                ...algorithmicRecommendation,
+                recommended_price: blendedPrice,
+                reasoning: `${algorithmicRecommendation.reasoning} AI-adjusted (JSON-parsed, guardrailed) using centralized pricing prompt.`,
+              };
+            }
+          } catch {
+            // Fall through to algorithmic recommendation
+          }
+        }
+      }
+    } catch (aiError) {
+      // AI enhancement failed, fall back to algorithmic recommendation
+      console.log(`    AI enhancement skipped: ${(aiError as Error).message}`);
+    }
+
+    return algorithmicRecommendation;
   } catch (error) {
     const err = error as Error;
     console.log(`    Warning: AI pricing unavailable: ${err.message}`);
@@ -1194,53 +1266,6 @@ async function suggestPriceWithFeedback(sourceQuote: Quote, matches: ExtendedQuo
 }
 
 /**
- * Generate feedback summary for a match
- */
-function generateFeedbackSummary(feedbackData: QuoteFeedbackData | undefined): string {
-  if (!feedbackData || feedbackData.total_feedback_count === 0) {
-    return '- Feedback: No feedback yet';
-  }
-
-  const parts: string[] = [];
-
-  // Rating summary
-  const thumbsUp = feedbackData.positive_feedback_count;
-  const thumbsDown = feedbackData.negative_feedback_count;
-  parts.push(`- Feedback: ${thumbsUp} 👍 / ${thumbsDown} 👎`);
-
-  // Feedback reasons
-  if (feedbackData.feedback_reasons && feedbackData.feedback_reasons.length > 0) {
-    const reasonsStr = feedbackData.feedback_reasons
-      .filter(r => r) // Filter out nulls
-      .map(r => r.replace(/_/g, ' '))
-      .join(', ');
-    if (reasonsStr) {
-      parts.push(`- Feedback Reasons: ${reasonsStr}`);
-    }
-  }
-
-  // Actual prices used (valuable for pricing accuracy)
-  if (feedbackData.actual_prices_used && feedbackData.actual_prices_used.length > 0) {
-    const avgActualPrice = feedbackData.actual_prices_used.reduce((a, b) => a + b, 0) / feedbackData.actual_prices_used.length;
-    parts.push(`- Verified Actual Price: $${Math.round(avgActualPrice).toLocaleString()} (from ${feedbackData.actual_prices_used.length} feedback${feedbackData.actual_prices_used.length > 1 ? 's' : ''})`);
-  }
-
-  // User notes (limit to avoid prompt bloat)
-  if (feedbackData.feedback_notes && feedbackData.feedback_notes.length > 0) {
-    const notes = feedbackData.feedback_notes
-      .filter(n => n && n.trim())
-      .slice(0, 2) // Only include up to 2 notes
-      .map(n => `"${n.substring(0, 100)}${n.length > 100 ? '...' : ''}"`)
-      .join('; ');
-    if (notes) {
-      parts.push(`- User Notes: ${notes}`);
-    }
-  }
-
-  return parts.join('\n');
-}
-
-/**
  * Get distance category for pricing
  */
 function getDistanceCategory(distanceMiles: number): string {
@@ -1253,6 +1278,7 @@ function getDistanceCategory(distanceMiles: number): string {
 }
 /**
  * Generate pricing recommendation prompt for AI
+ * Uses centralized PRICING_RECOMMENDATION_PROMPT from shippingQuotePrompts.ts
  * @param sourceQuote - The new quote being priced
  * @param topMatches - Historical similar quotes for reference
  * @param routeDistance - Calculated route distance (optional)
@@ -1260,11 +1286,41 @@ function getDistanceCategory(distanceMiles: number): string {
 function generatePricingPrompt(
   sourceQuote: Quote,
   topMatches: ExtendedQuoteMatch[],
-  routeDistance?: RouteDistance | null
+  routeDistance?: RouteDistance | null,
+  algorithmicRecommendation?: AIPricingDetails | null
 ): string {
   // Calculate feedback summary stats
   const matchesWithFeedback = topMatches.filter(m => m.feedbackData && m.feedbackData.total_feedback_count > 0);
   const matchesWithVerifiedPrices = topMatches.filter(m => m.feedbackData?.actual_prices_used && m.feedbackData.actual_prices_used.length > 0);
+
+  // Format historical matches for prompt context (aligned to formatHistoricalMatches expectations)
+  const historicalMatchesForPrompt = topMatches.slice(0, 5).map((m) => ({
+    score: m.similarity_score,
+    quote: {
+      origin: m.matchedQuoteData?.origin || 'Unknown',
+      destination: m.matchedQuoteData?.destination || 'Unknown',
+      serviceType: m.matchedQuoteData?.service || 'Not specified',
+      distanceMiles: m.matchedQuoteData?.distanceMiles ?? undefined,
+      weight: m.matchedQuoteData?.weight ?? undefined,
+      containerType: detectContainerType(m.matchedQuoteData?.cargo, m.matchedQuoteData?.service) || undefined,
+      commodity: m.matchedQuoteData?.cargo || 'Not specified',
+      quotedPrice: m.matchedQuoteData?.initialPrice ?? null,
+      finalPrice: m.matchedQuoteData?.finalPrice ?? null,
+      specialRequirements: undefined,
+    },
+    feedback: m.feedbackData ? {
+      won: m.feedbackData.positive_feedback_count > m.feedbackData.negative_feedback_count,
+      customerResponse: `thumbs_up=${m.feedbackData.positive_feedback_count}, thumbs_down=${m.feedbackData.negative_feedback_count}`,
+      actualPrice: (m.feedbackData.actual_prices_used && m.feedbackData.actual_prices_used.length > 0)
+        ? m.feedbackData.actual_prices_used[m.feedbackData.actual_prices_used.length - 1]
+        : null,
+    } : null,
+  }));
+
+  // Get the centralized pricing recommendation prompt with historical matches
+  const basePrompt = getPromptForTask('recommend_price', {
+    historicalMatches: historicalMatchesForPrompt,
+  });
 
   // Build distance info string
   const distanceInfo = routeDistance
@@ -1277,8 +1333,28 @@ function generatePricingPrompt(
 - **Route Distance**: ${sourceQuote.total_distance_miles} miles (from database)`
     : '';
 
-  const prompt = `You are an experienced shipping and transportation pricing specialist. Based on the following quote request and historical similar quotes, provide a pricing recommendation.
+  // Build quote details section
+  const isOOG = isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width);
+  const baselineInfo = algorithmicRecommendation?.recommended_price
+    ? `
+## ALGORITHMIC BASELINE (USE AS PRIMARY ANCHOR)
+- recommended_price: $${algorithmicRecommendation.recommended_price.toLocaleString()}
+- floor_price: ${algorithmicRecommendation.floor_price ? '$' + algorithmicRecommendation.floor_price.toLocaleString() : 'N/A'}
+- ceiling_price: ${algorithmicRecommendation.ceiling_price ? '$' + algorithmicRecommendation.ceiling_price.toLocaleString() : 'N/A'}
+- confidence: ${algorithmicRecommendation.confidence || 'N/A'}
+- reasoning: ${algorithmicRecommendation.reasoning || 'N/A'}
 
+CONSTRAINTS:
+- Your recommended_quote.initial_amount MUST be within [floor_price, ceiling_price] when those are present.
+- If floor/ceiling are missing, stay within ±20% of recommended_price unless you cite a specific factor present in the NEW QUOTE REQUEST.
+- Return ONLY valid JSON exactly matching the OUTPUT FORMAT (no prose, no markdown, no $ signs in numeric fields).
+`
+    : `
+CONSTRAINTS:
+- Return ONLY valid JSON exactly matching the OUTPUT FORMAT (no prose, no markdown, no $ signs in numeric fields).
+`;
+
+  const quoteDetails = `
 ## NEW QUOTE REQUEST
 - **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}${distanceInfo}
 - **Service Type**: ${sourceQuote.service_type || 'Not specified'}
@@ -1287,14 +1363,13 @@ function generatePricingPrompt(
 - **Pieces**: ${sourceQuote.number_of_pieces || 'Not specified'}
 - **Hazmat**: ${sourceQuote.hazardous_material ? 'Yes' : 'No'}
 - **Container Type**: ${detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type) || 'Standard/Not specified'}
-- **OOG (Out of Gauge)**: ${isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width) ? 'YES - Apply 1.35-1.45x pricing multiplier' : 'No'}
-${isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width) ? `
+- **OOG (Out of Gauge)**: ${isOOG ? 'YES - Apply 1.35-1.45x pricing multiplier' : 'No'}
+${isOOG ? `
 **IMPORTANT OOG PRICING NOTE**: This cargo is Out of Gauge (OOG). Based on learned feedback:
 - Open Top containers command +35-45% premium over standard containers
 - OOG ground transport requires flatbed/step-deck trailers (+15-25% premium)
 - State permits may be required ($50-300+ per state)
 - Apply minimum 1.35-1.45x multiplier to base rates
-- Real example: Miami-Orlando OOG was priced at $3,850 vs $2,750 standard (40% premium)
 ` : ''}${routeDistance ? `
 **DISTANCE-BASED PRICING GUIDANCE**:
 - Use the actual route distance of **${routeDistance.distanceMiles} miles** to calculate mileage-based rates
@@ -1302,46 +1377,23 @@ ${isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuot
 - For Drayage: Use distance category "${getDistanceCategory(routeDistance.distanceMiles)}" for base rate reference
 - Estimated transit: ${routeDistance.durationText}
 ` : ''}
-## SIMILAR HISTORICAL QUOTES
-${topMatches.slice(0, 5).map((m, i) => {
-  const feedbackBoostStr = m.feedbackBoost && m.feedbackBoost !== 0
-    ? ` (${m.feedbackBoost > 0 ? '+' : ''}${(m.feedbackBoost * 100).toFixed(0)}% feedback adjustment)`
-    : '';
-  return `
-### Match ${i + 1} (${(m.similarity_score * 100).toFixed(0)}% similar${feedbackBoostStr})
-- Route: ${m.matchedQuoteData?.origin} → ${m.matchedQuoteData?.destination}
-- Service: ${m.matchedQuoteData?.service}
-- Cargo: ${m.matchedQuoteData?.cargo || 'Not specified'}
-- Initial Quote: $${m.matchedQuoteData?.initialPrice?.toLocaleString() || 'N/A'}
-- Final Agreed Price: $${m.matchedQuoteData?.finalPrice?.toLocaleString() || 'N/A'}
-- Date: ${m.matchedQuoteData?.quoteDate ? new Date(m.matchedQuoteData.quoteDate).toLocaleDateString() : 'N/A'}
-- Status: ${m.matchedQuoteData?.status || 'Unknown'}
-${generateFeedbackSummary(m.feedbackData)}
-`;
-}).join('\n')}
 ${matchesWithFeedback.length > 0 ? `
 ## FEEDBACK INSIGHTS
 - **Matches with User Feedback**: ${matchesWithFeedback.length} of ${topMatches.slice(0, 5).length}
 - **Matches with Verified Actual Prices**: ${matchesWithVerifiedPrices.length}
 ${matchesWithVerifiedPrices.length > 0 ? `
-**IMPORTANT**: Matches with verified actual prices should be weighted more heavily in your recommendation as these represent real-world pricing that was accepted by customers.
+**IMPORTANT**: Matches with verified actual prices should be weighted more heavily as these represent real-world pricing accepted by customers.
 ` : ''}` : ''}
 
-## YOUR TASK
-1. Analyze the route, cargo, and service type
-2. Consider current market conditions (fuel costs, capacity)
-3. Note any special requirements (hazmat, oversized, time-sensitive)
-4. **Pay special attention to matches with positive feedback and verified actual prices** - these are more reliable
-5. Provide a recommended price range
+${baselineInfo}
 
-Respond with:
-- **Recommended Price**: $X,XXX - $X,XXX
-- **Confidence Level**: High/Medium/Low
-- **Key Factors**: List 3-5 factors that influenced your recommendation
-- **Negotiation Notes**: Any tips for negotiation or alternative options
+## YOUR TASK
+Use the historical matches plus the baseline to produce a competitive but realistic total quote.
 `;
 
-  return prompt;
+  return `${basePrompt}
+
+${quoteDetails}`;
 }
 
 interface PricingOutcome {

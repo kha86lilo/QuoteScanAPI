@@ -363,6 +363,95 @@ type PromptTask =
   | 'draft_response'
   | 'draft_followup';
 
+/**
+ * Format historical matches into a readable format for AI pricing analysis
+ */
+function formatHistoricalMatches(matches: unknown[]): string {
+  if (!matches || matches.length === 0) {
+    return '';
+  }
+
+  const toNumberOrNull = (value: unknown): number | null => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string') {
+      const cleaned = value.replace(/[$,\s]/g, '');
+      const parsed = Number(cleaned);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
+  const fmtMoney = (value: unknown): string => {
+    const n = toNumberOrNull(value);
+    return n != null ? '$' + n.toLocaleString() : 'N/A';
+  };
+
+  const formattedMatches = matches.map((match: any, index: number) => {
+    const q = match.quote || match;
+    const score = match.score ?? match.matchScore ?? 'N/A';
+    const feedback = match.feedback || match.historicalFeedback;
+
+    const origin = q.origin ?? q.route?.origin ?? q.route?.from ?? 'Unknown';
+    const destination = q.destination ?? q.route?.destination ?? q.route?.to ?? 'Unknown';
+    const serviceType = q.serviceType ?? q.service ?? q.service_type ?? 'Not specified';
+    const distanceMiles = q.distanceMiles ?? q.distance_miles ?? q.total_distance_miles ?? null;
+    const weight = q.weight ?? q.cargo_weight ?? null;
+    const containerType = q.containerType ?? q.container_type ?? q.container ?? 'N/A';
+    const equipmentType = q.equipmentType ?? q.equipment_type ?? 'N/A';
+    const commodity = q.commodity ?? q.cargo ?? q.cargo_description ?? 'Not specified';
+    const quotedPrice = q.quotedPrice ?? q.quoted_price ?? q.initialPrice ?? q.initial_price ?? null;
+    const finalPrice = q.finalPrice ?? q.final_price ?? null;
+
+    let matchText = `
+### Match ${index + 1} (Score: ${typeof score === 'number' ? (score * 100).toFixed(1) + '%' : score})
+
+**Route:** ${origin} → ${destination}
+**Service Type:** ${serviceType}
+**Distance:** ${distanceMiles ? distanceMiles + ' miles' : 'Not specified'}
+
+**Cargo Details:**
+- Weight: ${weight ? weight + ' lbs' : 'Not specified'}
+- Container: ${containerType}
+- Equipment: ${equipmentType}
+- Commodity: ${commodity}
+
+**Pricing:**
+-- Quoted Price: ${fmtMoney(quotedPrice)}
+-- Final Price: ${fmtMoney(finalPrice)}
+-- Per Mile Rate: ${distanceMiles && toNumberOrNull(quotedPrice) ? '$' + (toNumberOrNull(quotedPrice)! / Number(distanceMiles)).toFixed(2) + '/mile' : 'N/A'}`;
+
+    if (feedback) {
+      matchText += `
+
+**Historical Feedback:**
+- Won: ${feedback.won !== undefined ? (feedback.won ? 'Yes ✓' : 'No ✗') : 'Unknown'}
+- Customer Response: ${feedback.customerResponse || feedback.customer_response || 'None recorded'}
+- Actual Price Paid: ${fmtMoney(feedback.actualPrice ?? feedback.actual_price)}`;
+    }
+
+    if (q.specialRequirements || q.special_requirements) {
+      matchText += `
+**Special Requirements:** ${q.specialRequirements || q.special_requirements}`;
+    }
+
+    return matchText;
+  }).join('\n\n---\n');
+
+  return `
+
+## HISTORICAL MATCHES FOR REFERENCE
+
+Use these similar past quotes to inform your pricing recommendation. Pay attention to:
+- Price patterns for similar routes and distances
+- Win/loss feedback to understand competitive pricing
+- Per-mile rates for consistent pricing across different distances
+
+${formattedMatches}
+
+---
+**Summary:** ${matches.length} historical match${matches.length > 1 ? 'es' : ''} found. Use these as reference points for your pricing recommendation.`;
+}
+
 export function getPromptForTask(task: PromptTask, context: PromptContext = {}): string {
   switch (task) {
     case 'extract_email':
@@ -372,7 +461,7 @@ export function getPromptForTask(task: PromptTask, context: PromptContext = {}):
       return (
         PRICING_RECOMMENDATION_PROMPT +
         (context.historicalMatches
-          ? `\n\n## HISTORICAL MATCHES FOR REFERENCE\n${JSON.stringify(context.historicalMatches, null, 2)}`
+          ? formatHistoricalMatches(context.historicalMatches as unknown[])
           : '')
       );
 
