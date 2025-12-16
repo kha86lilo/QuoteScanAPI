@@ -1033,12 +1033,12 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
 /**
  * Run matching for all quotes created after a start date
  * POST /api/matches/run-all
- * Body: { startDate: '2024-01-01', minScore?: 0.45, maxMatches?: 10, useAI?: true, limit?: 1000, async?: true }
+ * Body: { startDate: '2024-01-01', minScore?: 0.3, maxMatches?: 10, useAI?: true, limit?: 1000, async?: true }
  */
 export const runAllMatching = asyncHandler(async (req: Request, res: Response) => {
   const {
     startDate,
-    minScore = 0.45,
+    minScore = 0.3,
     maxMatches = 10,
     useAI = true,
     limit = 1000,

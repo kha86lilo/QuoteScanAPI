@@ -932,9 +932,16 @@ Return complete, accurate JSON following this structure exactly.`;
     
     // Hazmat premium (keep conservative; some lanes already have explicit hazmat floors/cap exemptions)
     if (isHazmat) {
-      const hazmatMultiplier = isDrayage ? 1.15 : 1.25;
-      recommendedPrice = Math.round(recommendedPrice * hazmatMultiplier);
-      console.log(`  Hazmat premium applied (x${hazmatMultiplier}): $${recommendedPrice.toLocaleString()}`);
+      let hazmatMultiplier = 1.25;
+      if (isDrayage) {
+        // Long-haul "drayage" in this dataset often behaves like standard moves where the hazmat uplift
+        // is already baked into the historical baseline; applying it again causes chronic overpricing.
+        hazmatMultiplier = (distanceForRules > 100) ? 1.0 : 1.15;
+      }
+      if (hazmatMultiplier !== 1.0) {
+        recommendedPrice = Math.round(recommendedPrice * hazmatMultiplier);
+        console.log(`  Hazmat premium applied (x${hazmatMultiplier}): $${recommendedPrice.toLocaleString()}`);
+      }
     }
 
     if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
@@ -1066,7 +1073,8 @@ Return complete, accurate JSON following this structure exactly.`;
         const isForklift = /\bforklift\b/i.test(cargoDesc);
 
         let floor = 3000;
-        if (distanceMiles >= 500) floor = 3400;
+        if (distanceMiles >= 650 && bestPrice > 0 && bestPrice <= 1200 && !oversizeForPricing && !isHazmat) floor = 3600;
+        else if (distanceMiles >= 500) floor = 3400;
         else if (distanceMiles >= 350) floor = 3300;
         else if (distanceMiles >= 250) floor = 3200;
         else if (distanceMiles >= 150 && (isMediumHeavyMachinery || isForklift) && bestPrice < 2000) floor = 3200;
@@ -1165,6 +1173,14 @@ Return complete, accurate JSON following this structure exactly.`;
       if (isMetroNYNJ) {
         // NY/NJ drayage has outliers; cap closer to the low quartile on very short moves.
         cap = isVeryShort ? Math.min(1750, Math.max(1450, Math.round(q1 * 1.05))) : 2200;
+        if (isVeryShort) {
+          const histBaseline = adjustedWeightedAvg || weightedAvg;
+          // If the best match itself is low but the overall baseline is meaningfully higher,
+          // allow a higher ceiling to avoid chronic underpricing on these local moves.
+          if (bestPrice > 0 && bestPrice <= 1700 && histBaseline >= 1750) {
+            cap = Math.max(cap, Math.min(2000, Math.round(histBaseline * 1.05)));
+          }
+        }
       } else if (isMetroDFW) {
         cap = isVeryShort ? 850 : 950;
       } else if (isMetroTX) {
@@ -1231,8 +1247,12 @@ Return complete, accurate JSON following this structure exactly.`;
     // Keep this modest and avoid compounding with OSOW floors.
     if (isGround && oversizeForPricing && recommendedPrice > 0 && recommendedPrice < 4000) {
       const bump = isOversizeHeavy ? 1.15 : 1.08;
-      recommendedPrice = Math.round(recommendedPrice * bump);
-      console.log(`  Oversize keyword bump (ground): x${bump} → $${recommendedPrice.toLocaleString()}`);
+      // If we're already within ~10% of the best match, don't add an extra oversize uplift;
+      // this tends to push otherwise-correct predictions outside the 20% band.
+      if (!(bestPrice > 0 && recommendedPrice >= bestPrice * 0.90)) {
+        recommendedPrice = Math.round(recommendedPrice * bump);
+        console.log(`  Oversize keyword bump (ground): x${bump} → $${recommendedPrice.toLocaleString()}`);
+      }
     }
     
     const result: AIPricingDetails = {

@@ -47,7 +47,7 @@ router.post('/run', matchController.runMatchingForQuotes);
  * POST /api/matches/run-all
  * Body: {
  *   startDate: string,        // Required: ISO date (e.g., '2024-01-01')
- *   minScore?: number,        // Minimum match similarity score (default: 0.45)
+ *   minScore?: number,        // Minimum match similarity score (default: 0.3)
  *   maxMatches?: number,      // Max matches per quote (default: 10)
  *   useAI?: boolean,          // Use AI for pricing recommendations (default: true)
  *   limit?: number,           // Max quotes to process (default: 1000)
