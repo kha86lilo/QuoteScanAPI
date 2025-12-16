@@ -74,6 +74,7 @@ export interface EmailAttachment {
   size: number;
   isInline: boolean;
   lastModifiedDateTime: string;
+    distanceMiles?: number | null;
 }
 
 export interface EmailWithQuotes extends ShippingEmail {

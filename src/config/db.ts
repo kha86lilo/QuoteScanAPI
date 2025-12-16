@@ -1115,7 +1115,8 @@ async function getHistoricalQuotesForMatching(
       paramIndex++;
     }
 
-    // Use staff_quotes_replies as primary source - these are actual quoted prices from staff
+    // Use staff_quotes_replies as primary source - these are actual quoted prices from staff.
+    // Join to shipping_quotes to enrich historical rows with hazmat/dimensions/etc.
     const result = await client.query(
       `SELECT
         sqr.related_quote_id as quote_id,
@@ -1129,15 +1130,15 @@ async function getHistoricalQuotesForMatching(
         sqr.cargo_description,
         sqr.cargo_weight,
         sqr.weight_unit,
-        NULL as cargo_length,
-        NULL as cargo_width,
-        NULL as cargo_height,
-        NULL as dimension_unit,
+        q.cargo_length,
+        q.cargo_width,
+        q.cargo_height,
+        q.dimension_unit,
         sqr.number_of_pieces,
         sqr.service_type,
         NULL as service_level,
-        NULL as packaging_type,
-        NULL as hazardous_material,
+        q.packaging_type,
+        q.hazardous_material,
         sqr.quoted_price as initial_quote_amount,
         sqr.quoted_price as final_agreed_price,
         NULL as job_won,
@@ -1145,6 +1146,7 @@ async function getHistoricalQuotesForMatching(
         sqr.processed_at as quote_date,
         sqr.processed_at as created_at
       FROM staff_quotes_replies sqr
+      LEFT JOIN shipping_quotes q ON q.quote_id = sqr.related_quote_id
       WHERE sqr.is_pricing_email = true
         AND sqr.origin_city IS NOT NULL
         AND sqr.destination_city IS NOT NULL

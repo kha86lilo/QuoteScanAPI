@@ -786,6 +786,7 @@ function findEnhancedMatches(
           cargo: historical.cargo_description || undefined,
           service: historical.service_type || undefined,
           weight: historical.cargo_weight || undefined,
+          distanceMiles: historical.total_distance_miles ?? null,
           finalPrice: historical.final_agreed_price,
           initialPrice: historical.initial_quote_amount,
           quoteDate: historical.quote_date || historical.created_at,

@@ -308,6 +308,7 @@ Return complete, accurate JSON following this structure exactly.`;
     const normalizeText = (value: unknown): string => String(value ?? '').toLowerCase().trim();
     const hasAny = (haystack: string, needles: string[]): boolean => needles.some((n) => haystack.includes(n));
     const getState = (v: unknown): string => normalizeText(v).replace(/\./g, '').toUpperCase();
+    const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
     const toFiniteNumber = (value: unknown): number | null => {
       if (typeof value === 'number') {
         return Number.isFinite(value) ? value : null;
@@ -318,6 +319,23 @@ Return complete, accurate JSON following this structure exactly.`;
         return Number.isFinite(parsed) ? parsed : null;
       }
       return null;
+    };
+    const weightedMedian = (values: number[], weights: number[]): number | null => {
+      if (values.length === 0 || values.length !== weights.length) return null;
+      const pairs = values
+        .map((v, i) => ({ v, w: weights[i] ?? 0 }))
+        .filter((p) => Number.isFinite(p.v) && Number.isFinite(p.w) && p.w > 0)
+        .sort((a, b) => a.v - b.v);
+      if (pairs.length === 0) return null;
+      const total = pairs.reduce((sum, p) => sum + p.w, 0);
+      if (total <= 0) return null;
+      const half = total / 2;
+      let acc = 0;
+      for (const p of pairs) {
+        acc += p.w;
+        if (acc >= half) return p.v;
+      }
+      return pairs[pairs.length - 1]!.v;
     };
     const detectOversizeLikely = (q: Quote): boolean => {
       const desc = normalizeText(q.cargo_description);
@@ -398,7 +416,17 @@ Return complete, accurate JSON following this structure exactly.`;
     };
     
     const serviceType = (sourceQuote.service_type || '').toLowerCase();
-    const distanceMiles = routeDistance?.distanceMiles || 0;
+
+    const sourceOriginCity = normalizeText((sourceQuote as any).origin_city);
+    const sourceDestCity = normalizeText((sourceQuote as any).destination_city);
+    const sourceOriginState = getState((sourceQuote as any).origin_state_province ?? (sourceQuote as any).origin_state);
+    const sourceDestState = getState((sourceQuote as any).destination_state_province ?? (sourceQuote as any).destination_state);
+
+    const distanceMiles = routeDistance?.distanceMiles ?? 0;
+    const sameCity = !!sourceOriginCity && !!sourceDestCity && sourceOriginCity === sourceDestCity;
+    const sameStateOrUnknown = (!sourceOriginState || !sourceDestState || sourceOriginState === sourceDestState);
+    const sameLocal = sameCity && sameStateOrUnknown;
+    const distanceForRules = distanceMiles > 0 ? distanceMiles : (sameLocal ? 10 : 0);
 
     const isPureOceanRequest = (() => {
       const st = serviceType;
@@ -423,14 +451,14 @@ Return complete, accurate JSON following this structure exactly.`;
     
     // Service type correction for short routes
     let effectiveServiceType = serviceType;
-    if ((serviceType.includes('ocean') || serviceType.includes('intermodal')) && distanceMiles > 0 && distanceMiles < 150) {
+    if ((serviceType.includes('ocean') || serviceType.includes('intermodal')) && distanceForRules > 0 && distanceForRules < 150) {
       // Short-distance moves with equipment/OSOW behave like specialized ground, not typical container drayage.
       effectiveServiceType = oversizeLikely ? 'ground' : 'drayage';
-      console.log(`  Service correction: ${serviceType} -> ${effectiveServiceType} (${distanceMiles} miles)`);
+      console.log(`  Service correction: ${serviceType} -> ${effectiveServiceType} (${distanceForRules} miles)`);
     }
 
     // International "intermodal" labeling is often really ocean freight in this dataset
-    if (effectiveServiceType.includes('intermodal') && isInternationalLane && distanceMiles > 1000) {
+    if (effectiveServiceType.includes('intermodal') && isInternationalLane && distanceForRules > 1000) {
       effectiveServiceType = 'ocean';
       console.log(`  Service correction: intermodal -> ocean (international lane)`);
     }
@@ -489,6 +517,8 @@ Return complete, accurate JSON following this structure exactly.`;
     let totalWeight = 0;
     const prices: number[] = [];
     const priceWeights: number[] = [];
+    const distanceScaledPrices: number[] = [];
+    const distanceScaledWeights: number[] = [];
 
     // Dampen repeated identical/near-identical prices so duplicates don't dominate the baseline.
     const bucketSize = 50;
@@ -524,6 +554,18 @@ Return complete, accurate JSON following this structure exactly.`;
       totalWeight += weight;
       prices.push(price);
       priceWeights.push(weight);
+
+      const histDist = toFiniteNumber(m.matchedQuoteData?.distanceMiles);
+      if ((isGround || isDrayage) && distanceMiles > 0 && histDist && histDist > 0) {
+        const ratio = distanceMiles / histDist;
+        const minRatio = isGround ? 0.75 : 0.85;
+        const maxRatio = isGround ? 1.35 : 1.20;
+        const scaled = price * clamp(ratio, minRatio, maxRatio);
+        if (Number.isFinite(scaled) && scaled > 0) {
+          distanceScaledPrices.push(scaled);
+          distanceScaledWeights.push(weight);
+        }
+      }
     }
 
     if (prices.length === 0 || totalWeight <= 0 || !Number.isFinite(weightedSum)) {
@@ -566,6 +608,20 @@ Return complete, accurate JSON following this structure exactly.`;
       const lowerAnchor = Math.round(((q1 ?? sorted[0]) + (q2 ?? sorted[0])) / 2);
       adjustedWeightedAvg = Math.round((trimmedWeightedAvg * 0.5) + (lowerAnchor * 0.5));
     }
+
+    // Distance-normalize the baseline for trucking services to reduce large errors when the best textual match
+    // comes from a substantially different length-of-haul.
+    const distanceNormalizedBaseline = ((): number | null => {
+      if (!(isGround || isDrayage)) return null;
+      if (!(distanceMiles > 0)) return null;
+      if (distanceScaledPrices.length < 4) return null;
+      const med = weightedMedian(distanceScaledPrices, distanceScaledWeights);
+      if (!med || !Number.isFinite(med) || med <= 0) return null;
+      return Math.round(med);
+    })();
+    if (distanceNormalizedBaseline) {
+      adjustedWeightedAvg = Math.round((adjustedWeightedAvg * 0.5) + (distanceNormalizedBaseline * 0.5));
+    }
     
     // Hazmat check
     const isHazmat = sourceQuote.hazardous_material === true || 
@@ -586,6 +642,10 @@ Return complete, accurate JSON following this structure exactly.`;
     const q1 = sortedForAnchors[Math.floor((sortedForAnchors.length - 1) * 0.25)] ?? sortedForAnchors[0] ?? bestPrice;
     const median = sortedForAnchors[Math.floor(sortedForAnchors.length / 2)] ?? q1;
     let lowerQuartileAnchor = Math.round((q1 + median) / 2);
+
+    if (distanceNormalizedBaseline && (isGround || isDrayage)) {
+      lowerQuartileAnchor = Math.round((lowerQuartileAnchor * 0.5) + (distanceNormalizedBaseline * 0.5));
+    }
     const isHighSpread = priceSpread > 1.2 || priceRatio > 2.5;
 
     // Special handling: international ocean-like lanes can have a "cheap" historical tail.
@@ -756,7 +816,7 @@ Return complete, accurate JSON following this structure exactly.`;
 
     // Multi-container drayage moves should scale above single-container baselines.
     // Staff-reply history often mixes per-container and total pricing; keep this conservative.
-    if (isDrayage && distanceMiles > 0 && distanceMiles <= 60) {
+    if (isDrayage && distanceForRules > 0 && distanceForRules <= 60) {
       const desc = (sourceQuote.cargo_description || '').toString();
       const norm = normalizeText(desc);
       const m1 = norm.match(/\b(\d{1,2})\s*(?:x|×)\s*(?:20|40)\s*'?\s*(?:hc|high\s*cube)?\b/);
@@ -777,7 +837,7 @@ Return complete, accurate JSON following this structure exactly.`;
 
     // Minimum floor for short-haul drayage to avoid excessive underpricing
     if (isDrayage) {
-      const isShort = distanceMiles > 0 && distanceMiles <= 50;
+      const isShort = distanceForRules > 0 && distanceForRules <= 50;
       if (isShort) {
         // Allow a slightly lower floor when the historical baseline is clearly low
         const histBaseline = adjustedWeightedAvg || weightedAvg;
@@ -804,16 +864,25 @@ Return complete, accurate JSON following this structure exactly.`;
       if (cargoWeight <= 0) return false;
 
       const desc = normalizeText(sourceQuote.cargo_description);
+      const weightUnit = normalizeText(sourceQuote.weight_unit);
+
       const explicitLb = desc.includes(' lb') || desc.includes(' lbs') || desc.includes('pound');
       const explicitKg = desc.includes(' kg') || desc.includes('kgs') || desc.includes('kilogram');
-      // Weight units from extracted fields are often unreliable; only treat as KG when explicitly stated in text.
-      const weightInLbs = explicitKg ? cargoWeight * 2.205 : cargoWeight;
+      const unitSaysLb = weightUnit.includes('lb') || weightUnit.includes('lbs') || weightUnit.includes('pound');
+      const unitSaysKg = weightUnit.includes('kg');
+
+      // Only trust very-heavy logic when we have at least SOME signal the weight is actually a weight.
+      const hasWeightSignal = explicitLb || explicitKg || unitSaysLb || unitSaysKg;
+      if (!hasWeightSignal) return false;
+
+      // Prefer KG conversion only when explicitly indicated.
+      const weightInLbs = (explicitKg || unitSaysKg) ? cargoWeight * 2.205 : cargoWeight;
       return weightInLbs > 40000;
     })();
 
     // Short-haul equipment moves can be overpriced when a single high best-match dominates.
     // For sub-200 mile ground equipment (without explicit OSOW), cap toward the historical baseline.
-    const equipmentWord = /\bmachinery\b|\bequipment\b|\bmachine\b|\bexcavator\b|\bbackhoe\b|\bdozer\b|\bbulldozer\b|\bloader\b|\bskid\s*steer\b|\bforklift\b|\bcompactor\b|\broller\b|\bgrader\b|\bpaver\b|\bcrane\b|\btelehandler\b|\btract(?:or|er)\b/i;
+    const equipmentWord = /\bmachinery\b|\bequipment\b|\bmachine\b|\bexcavator\b|\bbackhoe\b|\bdozer\b|\bbulldozer\b|\bloader\b|\bskid\s*steer\b|\bforklift\b|\bcompactor\b|\broller\b|\bgrader\b|\bpaver\b|\bcrane\b|\btelehandler\b|\btract(?:or|er)\b|\bheat\s*exchanger(?:s)?\b|\bpress\s*brake\b|\bpressbrake\b|\bcnc\b/i;
     const equipmentLikelyShort = equipmentWord.test((sourceQuote.cargo_description || '').toString()) || oversizeLikely;
     if (isGround && distanceMiles > 0 && distanceMiles <= 200 && equipmentLikelyShort && !oversizeForPricing && !isHazmat) {
       const baseline = weightedAvg;
@@ -828,21 +897,26 @@ Return complete, accurate JSON following this structure exactly.`;
     // If this looks like machinery/OSOW on a non-trivial ground move, the historical top-N can be
     // misleadingly low (e.g., partial quotes). Establish a minimum band and allow a higher ceiling.
     const cargoDesc = (sourceQuote.cargo_description || '').toString();
-    const looksLikeMachinery = /\bmachinery\b|\bequipment\b|\bmachine\b|\bexcavator\b|\bbackhoe\b|\bdozer\b|\bbulldozer\b|\bskid\s*steer\b|\bloader\b|\bforklift\b|\bcompactor\b|\broller\b|\bgrader\b|\bpaver\b|\bcrane\b|\btelehandler\b|\btract(?:or|er)\b/i.test(cargoDesc);
+    const looksLikeMachinery = /\bmachinery\b|\bequipment\b|\bmachine\b|\bexcavator\b|\bbackhoe\b|\bdozer\b|\bbulldozer\b|\bskid\s*steer\b|\bloader\b|\bforklift\b|\bcompactor\b|\broller\b|\bgrader\b|\bpaver\b|\bcrane\b|\btelehandler\b|\btract(?:or|er)\b|\bheat\s*exchanger(?:s)?\b|\bpress\s*brake\b|\bpressbrake\b|\bcnc\b/i.test(cargoDesc);
     const originCityForDistanceFallback = normalizeText((sourceQuote as any).origin_city);
     const destCityForDistanceFallback = normalizeText((sourceQuote as any).destination_city);
     const hasDistanceFallback = distanceMiles === 0 && !!originCityForDistanceFallback && !!destCityForDistanceFallback && originCityForDistanceFallback !== destCityForDistanceFallback;
-    if (isGround && (distanceMiles >= 200 || hasDistanceFallback)) {
+    if (isGround && (distanceMiles >= 120 || hasDistanceFallback)) {
       const originStateLocal = getState((sourceQuote as any).origin_state_province ?? (sourceQuote as any).origin_state);
       const destStateLocal = getState((sourceQuote as any).destination_state_province ?? (sourceQuote as any).destination_state);
       const touchesNY = originStateLocal === 'NY' || destStateLocal === 'NY';
       const isIntlGround = isInternationalLane && distanceMiles > 2500;
       const equipmentLikely = looksLikeMachinery || oversizeLikely;
 
-      // Weight alone is often unreliable; require OSOW signal before applying the very high OSOW floor.
-      if (isOversizeHeavy && (oversizeForPricing || oversizeLikely)) {
+      // Very heavy cargo: only apply strong flooring when we have strict OSOW signals.
+      // "OversizeLikely" is intentionally fuzzy and can cause systematic overpricing on short-haul equipment moves.
+      if (isOversizeHeavy && oversizeForPricing) {
         const floor = distanceMiles >= 400 ? 4200 : 3500;
         recommendedPrice = Math.max(recommendedPrice, floor);
+        softCeiling = Math.max(softCeiling, 9000);
+      } else if (isOversizeHeavy && oversizeLikely && distanceMiles >= 400) {
+        // If we only have fuzzy signals, keep this limited to longer hauls.
+        recommendedPrice = Math.max(recommendedPrice, 3500);
         softCeiling = Math.max(softCeiling, 9000);
       }
 
@@ -855,9 +929,38 @@ Return complete, accurate JSON following this structure exactly.`;
 
       if (looksLikeMachinery) {
         // Machinery (including excavators) tends to price higher than commodity FTL, even if weight parsing is noisy.
-        const floor = distanceMiles >= 500 ? 3400 : (distanceMiles >= 350 ? 3300 : (distanceMiles >= 250 ? 3200 : 3000));
+        // For short-haul equipment where the best-match is already high, avoid forcing a high floor;
+        // these lanes often have legitimate low baselines and are handled by the short-haul equipment cap.
+        if (distanceMiles > 0 && distanceMiles < 200 && bestPrice >= 2000 && !oversizeForPricing) {
+          // no-op
+        } else {
+        const cargoWeight = (sourceQuote.cargo_weight as number) || 0;
+        const desc = normalizeText(sourceQuote.cargo_description);
+        const explicitKg = desc.includes(' kg') || desc.includes('kgs') || desc.includes('kilogram');
+        const weightInLbs = explicitKg ? cargoWeight * 2.205 : cargoWeight;
+        const isMediumHeavyMachinery = cargoWeight > 0 && weightInLbs >= 6000;
+        const isForklift = /\bforklift\b/i.test(cargoDesc);
+
+        let floor = 3000;
+        if (distanceMiles >= 500) floor = 3400;
+        else if (distanceMiles >= 350) floor = 3300;
+        else if (distanceMiles >= 250) floor = 3200;
+        else if (distanceMiles >= 150 && (isMediumHeavyMachinery || isForklift) && bestPrice < 2000) floor = 3200;
+
         recommendedPrice = Math.max(recommendedPrice, floor);
         softCeiling = Math.max(softCeiling, 7000);
+        }
+      }
+
+      // If the best-match price implies an implausibly low long-haul rate, avoid anchoring too low.
+      // This guards against partial/mis-labeled staff-reply history (e.g., $800 for 700 miles).
+      if (!looksLikeMachinery && distanceMiles >= 400 && bestPrice > 0 && (bestPrice / distanceMiles) < 2.0 && !isHazmat && !oversizeForPricing) {
+        const floor = Math.round(distanceMiles * 3.5 + 200);
+        if (recommendedPrice < floor) {
+          recommendedPrice = floor;
+          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          console.log(`  Long-haul ground low-anchor floor: $${floor.toLocaleString()}`);
+        }
       }
 
       // Targeted: equipment moves into/out of NY are frequently higher-cost.
@@ -881,8 +984,8 @@ Return complete, accurate JSON following this structure exactly.`;
     }
 
     // Additional caps for short-haul cases
-    const isDrayageShort = effectiveServiceType.includes('drayage') && distanceMiles > 0 && distanceMiles <= 50;
-    const isGroundShort = effectiveServiceType.includes('ground') && distanceMiles > 0 && distanceMiles <= 50;
+    const isDrayageShort = effectiveServiceType.includes('drayage') && distanceForRules > 0 && distanceForRules <= 50;
+    const isGroundShort = effectiveServiceType.includes('ground') && distanceForRules > 0 && distanceForRules <= 50;
     const originState = getState((sourceQuote as any).origin_state_province ?? (sourceQuote as any).origin_state);
     const destState = getState((sourceQuote as any).destination_state_province ?? (sourceQuote as any).destination_state);
     const originCity = normalizeText((sourceQuote as any).origin_city);
@@ -893,8 +996,8 @@ Return complete, accurate JSON following this structure exactly.`;
     const isMetroTX = isTX && (hasAny(originCity, ['houston', 'dallas', 'fort worth', 'austin', 'san antonio']) || hasAny(destCity, ['houston', 'dallas', 'fort worth', 'austin', 'san antonio']));
     const isMetroDFW = isTX && (hasAny(originCity, ['dallas', 'fort worth']) || hasAny(destCity, ['dallas', 'fort worth']));
 
-    if (isDrayageShort && !oversizeForPricing && !oversizeLikely) {
-      const isVeryShort = distanceMiles > 0 && distanceMiles <= 20;
+    if (isDrayageShort && !oversizeForPricing) {
+      const isVeryShort = distanceForRules > 0 && distanceForRules <= 20;
       let cap = 1500;
       if (isMetroNYNJ) {
         // NY/NJ drayage has outliers; cap closer to the low quartile on very short moves.
@@ -908,12 +1011,12 @@ Return complete, accurate JSON following this structure exactly.`;
     }
 
     // Medium drayage (50-80mi) in NY/NJ often has low actuals; cap toward the low tail to prevent 60-80% overpricing.
-    if (effectiveServiceType.includes('drayage') && distanceMiles > 50 && distanceMiles <= 80 && isNYNJ && !oversizeForPricing && !oversizeLikely) {
+    if (effectiveServiceType.includes('drayage') && distanceForRules > 50 && distanceForRules <= 80 && isNYNJ && !oversizeForPricing) {
       const cap = Math.max(1050, Math.round(q1 * 0.8));
       softCeiling = Math.min(softCeiling, cap);
     }
     if (isGroundShort && !oversizeForPricing && !oversizeLikely) {
-      const isVeryShort = distanceMiles > 0 && distanceMiles <= 20;
+      const isVeryShort = distanceForRules > 0 && distanceForRules <= 20;
       softCeiling = Math.min(softCeiling, isVeryShort ? 1400 : 1500);
     }
     

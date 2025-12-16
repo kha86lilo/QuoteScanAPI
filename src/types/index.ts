@@ -390,6 +390,7 @@ export interface MatchedQuoteData {
   cargo?: string;
   service?: string;
   weight?: number;
+  distanceMiles?: number | null;
   finalPrice?: number | null;
   initialPrice?: number | null;
   quoteDate?: string;
