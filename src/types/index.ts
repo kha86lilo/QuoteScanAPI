@@ -396,6 +396,11 @@ export interface MatchedQuoteData {
   cargo?: string;
   service?: string;
   weight?: number;
+  weightUnit?: string;
+  length?: number;
+  width?: number;
+  height?: number;
+  dimensionUnit?: string;
   distanceMiles?: number | null;
   finalPrice?: number | null;
   initialPrice?: number | null;

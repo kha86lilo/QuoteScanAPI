@@ -409,6 +409,55 @@ function formatHistoricalMatches(matches: unknown[]): string {
     return n != null ? '$' + n.toLocaleString() : 'N/A';
   };
 
+  /**
+   * Convert weight to lbs for consistent AI prompt formatting
+   */
+  const convertToLbs = (weight: unknown, unit: string | null | undefined): number | null => {
+    const w = toNumberOrNull(weight);
+    if (w === null || w <= 0) return null;
+    const unitLower = (unit || 'lbs').toLowerCase();
+    if (unitLower.includes('kg') || unitLower === 'kgs' || unitLower === 'kilogram') {
+      return Math.round(w * 2.20462 * 100) / 100; // kg to lbs
+    }
+    if (unitLower.includes('ton') || unitLower === 't' || unitLower === 'mt') {
+      return Math.round(w * 2204.62 * 100) / 100; // metric tons to lbs
+    }
+    return w; // assume lbs
+  };
+
+  /**
+   * Convert dimension to feet and inches for consistent AI prompt formatting
+   */
+  const convertToFeetInches = (dim: unknown, unit: string | null | undefined): string | null => {
+    const d = toNumberOrNull(dim);
+    if (d === null || d <= 0) return null;
+    const unitLower = (unit || '').toLowerCase();
+
+    let inches: number;
+    if (unitLower === 'cm' || unitLower === 'centimeter' || unitLower === 'centimeters') {
+      inches = d / 2.54; // cm to inches
+    } else if (unitLower === 'm' || unitLower === 'meter' || unitLower === 'meters') {
+      inches = d * 39.3701; // meters to inches
+    } else if (unitLower === 'mm' || unitLower === 'millimeter' || unitLower === 'millimeters') {
+      inches = d / 25.4; // mm to inches
+    } else if (unitLower === 'ft' || unitLower === 'feet' || unitLower === 'foot') {
+      inches = d * 12; // feet to inches
+    } else {
+      // assume inches
+      inches = d;
+    }
+
+    const feet = Math.floor(inches / 12);
+    const remainingInches = Math.round(inches % 12);
+
+    if (feet === 0) {
+      return `${remainingInches}"`;
+    } else if (remainingInches === 0) {
+      return `${feet}'`;
+    }
+    return `${feet}'${remainingInches}"`;
+  };
+
   const formattedMatches = matches.map((match: any, index: number) => {
     const q = match.quote || match;
     const score = match.score ?? match.matchScore ?? 'N/A';
@@ -418,12 +467,23 @@ function formatHistoricalMatches(matches: unknown[]): string {
     const destination = q.destination ?? q.route?.destination ?? q.route?.to ?? 'Unknown';
     const serviceType = q.serviceType ?? q.service ?? q.service_type ?? 'Not specified';
     const distanceMiles = q.distanceMiles ?? q.distance_miles ?? q.total_distance_miles ?? null;
-    const weight = q.weight ?? q.cargo_weight ?? null;
+    const rawWeight = q.weight ?? q.cargo_weight ?? null;
+    const weightUnit = q.weightUnit ?? q.weight_unit ?? null;
+    const weightInLbs = convertToLbs(rawWeight, weightUnit);
     const containerType = q.containerType ?? q.container_type ?? q.container ?? 'N/A';
     const equipmentType = q.equipmentType ?? q.equipment_type ?? 'N/A';
     const commodity = q.commodity ?? q.cargo ?? q.cargo_description ?? 'Not specified';
     const quotedPrice = q.quotedPrice ?? q.quoted_price ?? q.initialPrice ?? q.initial_price ?? null;
     const finalPrice = q.finalPrice ?? q.final_price ?? null;
+
+    // Get dimensions and convert to feet/inches
+    const dimUnit = q.dimensionUnit ?? q.dimension_unit ?? null;
+    const lengthFtIn = convertToFeetInches(q.length ?? q.cargo_length, dimUnit);
+    const widthFtIn = convertToFeetInches(q.width ?? q.cargo_width, dimUnit);
+    const heightFtIn = convertToFeetInches(q.height ?? q.cargo_height, dimUnit);
+    const dimensionsStr = (lengthFtIn && widthFtIn && heightFtIn)
+      ? `${lengthFtIn} × ${widthFtIn} × ${heightFtIn}`
+      : 'Not specified';
 
     let matchText = `
 ### Match ${index + 1} (Score: ${typeof score === 'number' ? (score * 100).toFixed(1) + '%' : score})
@@ -433,7 +493,8 @@ function formatHistoricalMatches(matches: unknown[]): string {
 **Distance:** ${distanceMiles ? distanceMiles + ' miles' : 'Not specified'}
 
 **Cargo Details:**
-- Weight: ${weight ? weight + ' lbs' : 'Not specified'}
+- Weight: ${weightInLbs ? `${weightInLbs.toLocaleString()} lbs` : 'Not specified'}
+- Dimensions (L×W×H): ${dimensionsStr}
 - Container: ${containerType}
 - Equipment: ${equipmentType}
 - Commodity: ${commodity}

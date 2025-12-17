@@ -1656,6 +1656,11 @@ function findEnhancedMatches(
           cargo: historical.cargo_description || undefined,
           service: historical.service_type || undefined,
           weight: historical.cargo_weight || undefined,
+          weightUnit: historical.weight_unit || undefined,
+          length: historical.cargo_length || undefined,
+          width: historical.cargo_width || undefined,
+          height: historical.cargo_height || undefined,
+          dimensionUnit: historical.dimension_unit || undefined,
           distanceMiles: historical.total_distance_miles ?? null,
           finalPrice: historical.final_agreed_price,
           initialPrice: historical.initial_quote_amount,
@@ -2502,6 +2507,69 @@ function generatePricingPrompt(
     return Math.sqrt(variance);
   };
 
+  // Unit conversion helpers for consistent AI prompt formatting
+  const toNumberOrNull = (value: unknown): number | null => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string') {
+      const cleaned = value.replace(/[$,\s]/g, '');
+      const parsed = Number(cleaned);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
+  const convertToLbs = (weight: unknown, unit: string | null | undefined): number | null => {
+    const w = toNumberOrNull(weight);
+    if (w === null || w <= 0) return null;
+    const unitLower = (unit || 'lbs').toLowerCase();
+    if (unitLower.includes('kg') || unitLower === 'kgs' || unitLower === 'kilogram') {
+      return Math.round(w * 2.20462 * 100) / 100; // kg to lbs
+    }
+    if (unitLower.includes('ton') || unitLower === 't' || unitLower === 'mt') {
+      return Math.round(w * 2204.62 * 100) / 100; // metric tons to lbs
+    }
+    return w; // assume lbs
+  };
+
+  const convertToFeetInches = (dim: unknown, unit: string | null | undefined): string | null => {
+    const d = toNumberOrNull(dim);
+    if (d === null || d <= 0) return null;
+    const unitLower = (unit || '').toLowerCase();
+
+    let inches: number;
+    if (unitLower === 'cm' || unitLower === 'centimeter' || unitLower === 'centimeters') {
+      inches = d / 2.54; // cm to inches
+    } else if (unitLower === 'm' || unitLower === 'meter' || unitLower === 'meters') {
+      inches = d * 39.3701; // meters to inches
+    } else if (unitLower === 'mm' || unitLower === 'millimeter' || unitLower === 'millimeters') {
+      inches = d / 25.4; // mm to inches
+    } else if (unitLower === 'ft' || unitLower === 'feet' || unitLower === 'foot') {
+      inches = d * 12; // feet to inches
+    } else {
+      // assume inches
+      inches = d;
+    }
+
+    const feet = Math.floor(inches / 12);
+    const remainingInches = Math.round(inches % 12);
+
+    if (feet === 0) {
+      return `${remainingInches}"`;
+    } else if (remainingInches === 0) {
+      return `${feet}'`;
+    }
+    return `${feet}'${remainingInches}"`;
+  };
+
+  // Convert source quote weight and dimensions for the prompt
+  const sourceWeightLbs = convertToLbs(sourceQuote.cargo_weight, sourceQuote.weight_unit);
+  const sourceLengthFtIn = convertToFeetInches(sourceQuote.cargo_length, sourceQuote.dimension_unit);
+  const sourceWidthFtIn = convertToFeetInches(sourceQuote.cargo_width, sourceQuote.dimension_unit);
+  const sourceHeightFtIn = convertToFeetInches(sourceQuote.cargo_height, sourceQuote.dimension_unit);
+  const sourceDimensionsStr = (sourceLengthFtIn && sourceWidthFtIn && sourceHeightFtIn)
+    ? `${sourceLengthFtIn} × ${sourceWidthFtIn} × ${sourceHeightFtIn}`
+    : 'Not specified';
+
   const minP = numericPrices.length ? Math.min(...numericPrices) : null;
   const maxP = numericPrices.length ? Math.max(...numericPrices) : null;
   const medP = median(numericPrices);
@@ -2550,6 +2618,11 @@ STABILITY / ANTI-ANCHORING:
       serviceType: m.matchedQuoteData?.service || 'Not specified',
       distanceMiles: m.matchedQuoteData?.distanceMiles ?? undefined,
       weight: m.matchedQuoteData?.weight ?? undefined,
+      weightUnit: m.matchedQuoteData?.weightUnit ?? undefined,
+      length: m.matchedQuoteData?.length ?? undefined,
+      width: m.matchedQuoteData?.width ?? undefined,
+      height: m.matchedQuoteData?.height ?? undefined,
+      dimensionUnit: m.matchedQuoteData?.dimensionUnit ?? undefined,
       containerType: detectContainerType(m.matchedQuoteData?.cargo, m.matchedQuoteData?.service) || undefined,
       commodity: m.matchedQuoteData?.cargo || 'Not specified',
       quotedPrice: m.matchedQuoteData?.initialPrice ?? null,
@@ -2644,7 +2717,7 @@ CONSTRAINTS:
 - **Incoterms**: ${sourceQuote.incoterms || 'Not specified'}
 - **Customs Clearance Needed**: ${sourceQuote.customs_clearance_needed ? 'Yes' : 'No/Not specified'}
 - **Cargo Description**: ${sourceQuote.cargo_description || 'Not specified'}
-- **Weight**: ${sourceQuote.cargo_weight || 'Not specified'} ${sourceQuote.weight_unit || ''}
+- **Weight**: ${sourceWeightLbs ? `${sourceWeightLbs.toLocaleString()} lbs` : 'Not specified'}
 - **Pieces**: ${sourceQuote.number_of_pieces || 'Not specified'}
 - **Hazmat**: ${sourceQuote.hazardous_material ? 'Yes' : 'No'}
 - **Hazmat Class / UN**: ${sourceQuote.hazmat_class || 'Not specified'} / ${sourceQuote.hazmat_un_number || 'Not specified'}
@@ -2652,7 +2725,7 @@ CONSTRAINTS:
 - **Temperature Range**: ${sourceQuote.temperature_range || 'Not specified'}
 - **Declared Value**: ${sourceQuote.declared_value ? `${sourceQuote.declared_value} ${sourceQuote.declared_value_currency || ''}` : 'Not specified'}
 - **Packaging Type**: ${sourceQuote.packaging_type || 'Not specified'}
-- **Dimensions (L×W×H)**: ${sourceQuote.cargo_length ?? 'N/A'}×${sourceQuote.cargo_width ?? 'N/A'}×${sourceQuote.cargo_height ?? 'N/A'} ${sourceQuote.dimension_unit || ''}
+- **Dimensions (L×W×H)**: ${sourceDimensionsStr}
 - **Overweight/Oversize Flags**: overweight=${sourceQuote.is_overweight ? 'Yes' : 'No/Not specified'}, oversized=${sourceQuote.is_oversized ? 'Yes' : 'No/Not specified'}
 - **Permits / Pilot Car / Tarping**: permits=${sourceQuote.requires_permits ? 'Yes' : 'No/Not specified'}, pilot_car=${sourceQuote.requires_pilot_car ? 'Yes' : 'No/Not specified'}, tarping=${sourceQuote.requires_tarping ? 'Yes' : 'No/Not specified'}
 - **Equipment Requested**: ${sourceQuote.equipment_type_requested || 'Not specified'}
