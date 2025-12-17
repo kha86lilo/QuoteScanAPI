@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { ShippingEmail, EmailWithQuotes, PaginatedEmailsResponse } from '@/types';
 import EmailList from '@/components/EmailList';
 import EmailDetails from '@/components/EmailDetails';
-import { Mail, RefreshCw } from 'lucide-react';
+import { Mail, RefreshCw, LayoutDashboard } from 'lucide-react';
+import Dashboard from '@/components/Dashboard';
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -21,6 +22,7 @@ export default function Home() {
     totalCount: 0,
     limit: DEFAULT_PAGE_SIZE,
   });
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false);
 
   const fetchEmails = useCallback(async (page: number = 1) => {
     setIsLoadingList(true);
@@ -81,7 +83,7 @@ export default function Home() {
   };
 
   const handleFeedbackSubmit = async (
-    matchId: number,
+    quoteId: number,
     data: {
       rating: number;
       feedbackReason: string | null;
@@ -89,7 +91,7 @@ export default function Home() {
       actualPriceUsed: number | null;
     }
   ) => {
-    const response = await fetch(`/api/matches/${matchId}/feedback`, {
+    const response = await fetch(`/api/quotes/${quoteId}/feedback`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -115,14 +117,23 @@ export default function Home() {
           <Mail className="w-6 h-6" />
           <h1 className="text-lg font-semibold">Shipping Emails</h1>
         </div>
-        <button
-          onClick={() => fetchEmails(pagination.currentPage)}
-          disabled={isLoadingList}
-          className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded hover:bg-white/20 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoadingList ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsDashboardOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded hover:bg-white/20 transition-colors"
+          >
+            <LayoutDashboard className="w-4 h-4" />
+            Dashboard
+          </button>
+          <button
+            onClick={() => fetchEmails(pagination.currentPage)}
+            disabled={isLoadingList}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded hover:bg-white/20 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoadingList ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -168,6 +179,9 @@ export default function Home() {
           />
         </div>
       </div>
+
+      {/* Dashboard Modal */}
+      <Dashboard isOpen={isDashboardOpen} onClose={() => setIsDashboardOpen(false)} />
     </div>
   );
 }

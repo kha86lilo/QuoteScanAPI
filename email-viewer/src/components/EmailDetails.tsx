@@ -2,7 +2,18 @@
 
 import { useState } from 'react';
 import { EmailWithQuotes, QuoteWithMatches } from '@/types';
-import { Mail, Calendar, Paperclip, Building, Eye, ThumbsUp, ThumbsDown, AlertTriangle, FileDown, Info } from 'lucide-react';
+import {
+  Mail,
+  Calendar,
+  Paperclip,
+  Building,
+  Eye,
+  ThumbsUp,
+  ThumbsDown,
+  AlertTriangle,
+  FileDown,
+  Info,
+} from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import Attachments from './Attachments';
 import MatchesDialog from './MatchesDialog';
@@ -11,12 +22,15 @@ import FeedbackDialog from './FeedbackDialog';
 interface EmailDetailsProps {
   email: EmailWithQuotes | null;
   isLoading: boolean;
-  onFeedbackSubmit: (matchId: number, data: {
-    rating: number;
-    feedbackReason: string | null;
-    feedbackNotes: string | null;
-    actualPriceUsed: number | null;
-  }) => Promise<void>;
+  onFeedbackSubmit: (
+    quoteId: number,
+    data: {
+      rating: number;
+      feedbackReason: string | null;
+      feedbackNotes: string | null;
+      actualPriceUsed: number | null;
+    }
+  ) => Promise<void>;
 }
 
 function formatFullDate(dateString: string): string {
@@ -37,7 +51,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
   const [showPriceReasoningDialog, setShowPriceReasoningDialog] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState<1 | -1>(1);
   const [selectedQuote, setSelectedQuote] = useState<QuoteWithMatches | null>(null);
-  const [selectedMatchId, setSelectedMatchId] = useState<number | null>(null);
+  const [selectedQuoteIdForFeedback, setSelectedQuoteIdForFeedback] = useState<number | null>(null);
   const [selectedSuggestedPrice, setSelectedSuggestedPrice] = useState<number | null>(null);
 
   const handleViewMatches = (quote: QuoteWithMatches) => {
@@ -46,21 +60,19 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
   };
 
   const handleThumbsUp = (quote: QuoteWithMatches) => {
-    const topMatch = quote.matches?.[0];
-    if (topMatch) {
+    if (quote.ai_recommended_price !== null) {
       setFeedbackRating(1);
-      setSelectedMatchId(topMatch.match_id);
-      setSelectedSuggestedPrice(topMatch.suggested_price);
+      setSelectedQuoteIdForFeedback(quote.quote_id);
+      setSelectedSuggestedPrice(quote.ai_recommended_price);
       setShowFeedbackDialog(true);
     }
   };
 
   const handleThumbsDown = (quote: QuoteWithMatches) => {
-    const topMatch = quote.matches?.[0];
-    if (topMatch) {
+    if (quote.ai_recommended_price !== null) {
       setFeedbackRating(-1);
-      setSelectedMatchId(topMatch.match_id);
-      setSelectedSuggestedPrice(topMatch.suggested_price);
+      setSelectedQuoteIdForFeedback(quote.quote_id);
+      setSelectedSuggestedPrice(quote.ai_recommended_price);
       setShowFeedbackDialog(true);
     }
   };
@@ -71,8 +83,8 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
     feedbackNotes: string | null;
     actualPriceUsed: number | null;
   }) => {
-    if (selectedMatchId) {
-      await onFeedbackSubmit(selectedMatchId, data);
+    if (selectedQuoteIdForFeedback) {
+      await onFeedbackSubmit(selectedQuoteIdForFeedback, data);
     }
   };
 
@@ -82,27 +94,45 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
 
   const formatPrice = (price: number | null) => {
     if (price === null) return '-';
-    return Number(price).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return Number(price).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
   };
 
   // Price reasoning dialog component
-  const PriceReasoningDialog = ({ quote, isOpen, onClose }: { quote: QuoteWithMatches; isOpen: boolean; onClose: () => void }) => {
+  const PriceReasoningDialog = ({
+    quote,
+    isOpen,
+    onClose,
+  }: {
+    quote: QuoteWithMatches;
+    isOpen: boolean;
+    onClose: () => void;
+  }) => {
     if (!isOpen) return null;
 
-    const confidenceColor = quote.ai_confidence === 'high'
-      ? 'text-green-700'
-      : quote.ai_confidence === 'medium'
-        ? 'text-yellow-700'
-        : 'text-red-700';
+    const confidenceColor =
+      quote.ai_confidence === 'high'
+        ? 'text-green-700'
+        : quote.ai_confidence === 'medium'
+          ? 'text-yellow-700'
+          : 'text-red-700';
 
-    const confidenceBg = quote.ai_confidence === 'high'
-      ? 'bg-green-100'
-      : quote.ai_confidence === 'medium'
-        ? 'bg-yellow-100'
-        : 'bg-red-100';
+    const confidenceBg =
+      quote.ai_confidence === 'high'
+        ? 'bg-green-100'
+        : quote.ai_confidence === 'medium'
+          ? 'bg-yellow-100'
+          : 'bg-red-100';
 
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div
+        className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+        onClick={onClose}
+      >
         <div
           className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden"
           onClick={(e) => e.stopPropagation()}
@@ -124,7 +154,12 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                 className="text-white/80 hover:text-white hover:bg-white/20 rounded-lg p-1.5 transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
@@ -135,10 +170,15 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
             {/* Recommended Price */}
             <div className="text-center py-4 bg-blue-50 rounded-xl">
               <p className="text-sm text-blue-600 font-medium mb-1">Recommended Price</p>
-              <p className="text-3xl font-bold text-blue-700">{formatPrice(quote.ai_recommended_price)}</p>
+              <p className="text-3xl font-bold text-blue-700">
+                {formatPrice(quote.ai_recommended_price)}
+              </p>
               {quote.ai_confidence && (
-                <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold ${confidenceBg} ${confidenceColor}`}>
-                  {quote.ai_confidence.charAt(0).toUpperCase() + quote.ai_confidence.slice(1)} Confidence
+                <span
+                  className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold ${confidenceBg} ${confidenceColor}`}
+                >
+                  {quote.ai_confidence.charAt(0).toUpperCase() + quote.ai_confidence.slice(1)}{' '}
+                  Confidence
                 </span>
               )}
             </div>
@@ -146,19 +186,27 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
             {/* Price Range */}
             {(quote.floor_price || quote.ceiling_price || quote.target_price) && (
               <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Price Range</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                  Price Range
+                </p>
                 <div className="grid grid-cols-3 gap-4">
                   <div className="text-center p-3 bg-white rounded-lg border border-gray-200">
                     <p className="text-xs text-gray-500 mb-1">Floor</p>
-                    <p className="text-lg font-semibold text-green-600">{formatPrice(quote.floor_price)}</p>
+                    <p className="text-lg font-semibold text-green-600">
+                      {formatPrice(quote.floor_price)}
+                    </p>
                   </div>
                   <div className="text-center p-3 bg-white rounded-lg border-2 border-blue-200">
                     <p className="text-xs text-gray-500 mb-1">Target</p>
-                    <p className="text-lg font-semibold text-blue-600">{formatPrice(quote.target_price)}</p>
+                    <p className="text-lg font-semibold text-blue-600">
+                      {formatPrice(quote.target_price)}
+                    </p>
                   </div>
                   <div className="text-center p-3 bg-white rounded-lg border border-gray-200">
                     <p className="text-xs text-gray-500 mb-1">Ceiling</p>
-                    <p className="text-lg font-semibold text-amber-600">{formatPrice(quote.ceiling_price)}</p>
+                    <p className="text-lg font-semibold text-amber-600">
+                      {formatPrice(quote.ceiling_price)}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -167,9 +215,13 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
             {/* Reasoning */}
             {quote.ai_reasoning && (
               <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">AI Reasoning</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                  AI Reasoning
+                </p>
                 <div className="bg-gray-50 rounded-xl p-4 max-h-48 overflow-y-auto">
-                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{quote.ai_reasoning}</p>
+                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                    {quote.ai_reasoning}
+                  </p>
                 </div>
               </div>
             )}
@@ -191,7 +243,11 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
 
   const exportProforma = (quote: QuoteWithMatches) => {
     const suggestedPrice = quote.ai_recommended_price;
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const today = new Date().toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
 
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -241,8 +297,14 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    const origin = [quote.origin_city, quote.origin_state_province, quote.origin_country].filter(Boolean).join(', ') || 'N/A';
-    const destination = [quote.destination_city, quote.destination_state_province, quote.destination_country].filter(Boolean).join(', ') || 'N/A';
+    const origin =
+      [quote.origin_city, quote.origin_state_province, quote.origin_country]
+        .filter(Boolean)
+        .join(', ') || 'N/A';
+    const destination =
+      [quote.destination_city, quote.destination_state_province, quote.destination_country]
+        .filter(Boolean)
+        .join(', ') || 'N/A';
     doc.text(`Origin: ${origin}`, 20, y);
     y += 6;
     doc.text(`Destination: ${destination}`, 20, y);
@@ -260,11 +322,16 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
     doc.setFont('helvetica', 'normal');
     doc.text(`Description: ${quote.cargo_description || 'N/A'}`, 20, y);
     y += 6;
-    doc.text(`Weight: ${quote.cargo_weight ? `${quote.cargo_weight} ${quote.weight_unit || 'kg'}` : 'N/A'}`, 20, y);
+    doc.text(
+      `Weight: ${quote.cargo_weight ? `${quote.cargo_weight} ${quote.weight_unit || 'kg'}` : 'N/A'}`,
+      20,
+      y
+    );
     y += 6;
-    const dimensions = quote.cargo_length && quote.cargo_width && quote.cargo_height
-      ? `${quote.cargo_length} x ${quote.cargo_width} x ${quote.cargo_height} ${quote.dimension_unit || 'cm'}`
-      : 'N/A';
+    const dimensions =
+      quote.cargo_length && quote.cargo_width && quote.cargo_height
+        ? `${quote.cargo_length} x ${quote.cargo_width} x ${quote.cargo_height} ${quote.dimension_unit || 'cm'}`
+        : 'N/A';
     doc.text(`Dimensions: ${dimensions}`, 20, y);
     y += 6;
     doc.text(`Number of Pieces: ${quote.number_of_pieces || 'N/A'}`, 20, y);
@@ -301,21 +368,36 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
         doc.text('AI Suggested Price:', 20, y);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(0, 100, 180);
-        doc.text(`$${suggestedPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth - 20, y, { align: 'right' });
+        doc.text(
+          `$${suggestedPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          pageWidth - 20,
+          y,
+          { align: 'right' }
+        );
         doc.setTextColor(0, 0, 0);
         doc.setFont('helvetica', 'normal');
         y += 8;
       }
       if (quote.initial_quote_amount) {
         doc.text('Initial Quote:', 20, y);
-        doc.text(`$${quote.initial_quote_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth - 20, y, { align: 'right' });
+        doc.text(
+          `$${quote.initial_quote_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          pageWidth - 20,
+          y,
+          { align: 'right' }
+        );
         y += 8;
       }
       if (quote.final_agreed_price) {
         doc.text('Final Agreed Price:', 20, y);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(0, 150, 0);
-        doc.text(`$${quote.final_agreed_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, pageWidth - 20, y, { align: 'right' });
+        doc.text(
+          `$${quote.final_agreed_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          pageWidth - 20,
+          y,
+          { align: 'right' }
+        );
         doc.setTextColor(0, 0, 0);
         doc.setFont('helvetica', 'normal');
         y += 8;
@@ -326,7 +408,12 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
     y = doc.internal.pageSize.getHeight() - 20;
     doc.setFontSize(8);
     doc.setTextColor(128, 128, 128);
-    doc.text('This is a proforma invoice and not a final invoice. Terms and conditions apply.', pageWidth / 2, y, { align: 'center' });
+    doc.text(
+      'This is a proforma invoice and not a final invoice. Terms and conditions apply.',
+      pageWidth / 2,
+      y,
+      { align: 'center' }
+    );
 
     doc.save(`proforma_quote_${quote.quote_id}.pdf`);
   };
@@ -413,10 +500,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
       </div>
 
       {/* Attachments Section */}
-      <Attachments
-        emailId={email.email_id}
-        hasAttachments={email.email_has_attachments}
-      />
+      <Attachments emailId={email.email_id} hasAttachments={email.email_has_attachments} />
 
       {/* Quotes Section */}
       <div className="px-6 py-4">
@@ -439,10 +523,14 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Status</th>
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Client</th>
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Origin</th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Destination</th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">
+                    Destination
+                  </th>
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Cargo</th>
                   <th className="px-3 py-2 text-left font-semibold text-outlook-text">Service</th>
-                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">AI Price</th>
+                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">
+                    AI Price
+                  </th>
                   <th className="px-3 py-2 text-center font-semibold text-outlook-text">Actions</th>
                 </tr>
               </thead>
@@ -452,15 +540,22 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                   const topMatch = quote.matches?.[0];
                   return (
                     <tr key={quote.quote_id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 text-outlook-text font-medium hidden">#{quote.quote_id}</td>
+                      <td className="px-3 py-2 text-outlook-text font-medium hidden">
+                        #{quote.quote_id}
+                      </td>
                       <td className="px-3 py-2">
                         {quote.quote_status && (
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            quote.quote_status === 'Approved' ? 'bg-green-100 text-green-800' :
-                            quote.quote_status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
-                            quote.quote_status === 'Rejected' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              quote.quote_status === 'Approved'
+                                ? 'bg-green-100 text-green-800'
+                                : quote.quote_status === 'Pending'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : quote.quote_status === 'Rejected'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-gray-100 text-gray-800'
+                            }`}
+                          >
                             {quote.quote_status}
                           </span>
                         )}
@@ -470,12 +565,30 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-outlook-text">{quote.client_company_name || '-'}</td>
-                      <td className="px-3 py-2 text-outlook-text">{formatLocation(quote.origin_city, quote.origin_state_province, quote.origin_country)}</td>
-                      <td className="px-3 py-2 text-outlook-text">{formatLocation(quote.destination_city, quote.destination_state_province, quote.destination_country)}</td>
+                      <td className="px-3 py-2 text-outlook-text">
+                        {quote.client_company_name || '-'}
+                      </td>
+                      <td className="px-3 py-2 text-outlook-text">
+                        {formatLocation(
+                          quote.origin_city,
+                          quote.origin_state_province,
+                          quote.origin_country
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-outlook-text">
+                        {formatLocation(
+                          quote.destination_city,
+                          quote.destination_state_province,
+                          quote.destination_country
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-outlook-text">
                         {quote.cargo_description || '-'}
-                        {quote.cargo_weight && <span className="text-outlook-textLight text-xs ml-1">({quote.cargo_weight} {quote.weight_unit || 'kg'})</span>}
+                        {quote.cargo_weight && (
+                          <span className="text-outlook-textLight text-xs ml-1">
+                            ({quote.cargo_weight} {quote.weight_unit || 'kg'})
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-outlook-text">{quote.service_type || '-'}</td>
                       <td className="px-3 py-2 text-center">
@@ -488,9 +601,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm hover:bg-blue-200 transition-colors cursor-pointer"
                           >
                             {formatPrice(suggestedPrice)}
-                            {quote.ai_reasoning && (
-                              <Info className="w-3.5 h-3.5 text-blue-500" />
-                            )}
+                            {quote.ai_reasoning && <Info className="w-3.5 h-3.5 text-blue-500" />}
                           </button>
                         ) : (
                           <span className="text-outlook-textLight">-</span>
@@ -505,31 +616,30 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                           >
                             <FileDown className="w-4 h-4 text-outlook-blue" />
                           </button>
-                          <button
-                            onClick={() => handleViewMatches(quote)}
-                            className="p-1 hover:bg-outlook-hover rounded transition-colors"
-                            title={`View Matches (${quote.matches?.length || 0})`}
-                          >
-                            <Eye className="w-4 h-4 text-outlook-blue" />
-                          </button>
-                          {topMatch && (
-                            <>
-                              <button
-                                onClick={() => handleThumbsUp(quote)}
-                                className="p-1 hover:bg-green-50 rounded transition-colors"
-                                title="Good suggestion"
-                              >
-                                <ThumbsUp className="w-4 h-4 text-green-600" />
-                              </button>
-                              <button
-                                onClick={() => handleThumbsDown(quote)}
-                                className="p-1 hover:bg-red-50 rounded transition-colors"
-                                title="Poor suggestion"
-                              >
-                                <ThumbsDown className="w-4 h-4 text-red-600" />
-                              </button>
-                            </>
+                          {quote.matches && quote.matches.length > 0 && (
+                            <button
+                              onClick={() => handleViewMatches(quote)}
+                              className="p-1 hover:bg-outlook-hover rounded transition-colors"
+                              title={`View Matches (${quote.matches.length})`}
+                            >
+                              <Eye className="w-4 h-4 text-outlook-blue" />
+                            </button>
                           )}
+
+                          <button
+                            onClick={() => handleThumbsUp(quote)}
+                            className="p-1 hover:bg-green-50 rounded transition-colors"
+                            title="Good suggestion"
+                          >
+                            <ThumbsUp className="w-4 h-4 text-green-600" />
+                          </button>
+                          <button
+                            onClick={() => handleThumbsDown(quote)}
+                            className="p-1 hover:bg-red-50 rounded transition-colors"
+                            title="Poor suggestion"
+                          >
+                            <ThumbsDown className="w-4 h-4 text-red-600" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -559,14 +669,14 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
         />
       )}
 
-      {selectedMatchId && (
+      {selectedQuoteIdForFeedback && (
         <FeedbackDialog
           isOpen={showFeedbackDialog}
           onClose={() => {
             setShowFeedbackDialog(false);
-            setSelectedMatchId(null);
+            setSelectedQuoteIdForFeedback(null);
           }}
-          matchId={selectedMatchId}
+          quoteId={selectedQuoteIdForFeedback}
           suggestedPrice={selectedSuggestedPrice}
           rating={feedbackRating}
           onSubmit={handleFeedbackSubmit}
@@ -594,8 +704,8 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                   email.ai_confidence_score >= 0.8
                     ? 'bg-green-500'
                     : email.ai_confidence_score >= 0.5
-                    ? 'bg-yellow-500'
-                    : 'bg-red-500'
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
                 }`}
                 style={{ width: `${email.ai_confidence_score * 100}%` }}
               />

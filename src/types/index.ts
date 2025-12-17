@@ -510,9 +510,9 @@ export type FeedbackReason =
   | 'different_client_type'
   | 'other';
 
-export interface MatchFeedback {
+export interface AIPriceFeedback {
   feedback_id?: number;
-  match_id: number;
+  ai_price_id: number;
   user_id?: string | null;
   rating: 1 | -1;
   feedback_reason?: FeedbackReason | null;
@@ -520,6 +520,9 @@ export interface MatchFeedback {
   actual_price_used?: number | null;
   created_at?: string;
 }
+
+/** @deprecated Use AIPriceFeedback instead - table renamed to quote_ai_price_feedback */
+export type MatchFeedback = AIPriceFeedback;
 
 export interface FeedbackStatistics {
   total_feedback: string;

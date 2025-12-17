@@ -2788,7 +2788,8 @@ async function learnFromFeedback(): Promise<LearnFromFeedbackResult> {
         AVG(CASE WHEN f.rating = -1 THEN (value::numeric) ELSE NULL END) as avg_score_when_negative
       FROM quote_matches m
       CROSS JOIN LATERAL jsonb_each_text(m.match_criteria)
-      INNER JOIN quote_match_feedback f ON m.match_id = f.match_id
+      INNER JOIN ai_pricing_recommendations apr ON m.source_quote_id = apr.quote_id
+      INNER JOIN quote_ai_price_feedback f ON apr.id = f.ai_price_id
       WHERE m.match_algorithm_version = 'v2-enhanced'
       GROUP BY key
       HAVING COUNT(*) >= 5

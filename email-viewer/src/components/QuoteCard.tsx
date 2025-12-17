@@ -1,14 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { QuoteWithMatches, QuoteMatch } from '@/types';
+import { QuoteWithMatches } from '@/types';
 import { MapPin, Package, Truck, DollarSign, ThumbsUp, ThumbsDown, Eye, AlertTriangle } from 'lucide-react';
 import MatchesDialog from './MatchesDialog';
 import FeedbackDialog from './FeedbackDialog';
 
 interface QuoteCardProps {
   quote: QuoteWithMatches;
-  onFeedbackSubmit: (matchId: number, data: {
+  onFeedbackSubmit: (quoteId: number, data: {
     rating: number;
     feedbackReason: string | null;
     feedbackNotes: string | null;
@@ -20,24 +20,25 @@ export default function QuoteCard({ quote, onFeedbackSubmit }: QuoteCardProps) {
   const [showMatchesDialog, setShowMatchesDialog] = useState(false);
   const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState<1 | -1>(1);
-  const [selectedMatchId, setSelectedMatchId] = useState<number | null>(null);
   const [selectedSuggestedPrice, setSelectedSuggestedPrice] = useState<number | null>(null);
 
   const topMatch = quote.matches?.[0];
-  const suggestedPrice = quote.top_suggested_price || topMatch?.suggested_price;
+  const suggestedPrice = quote.ai_recommended_price || quote.top_suggested_price || topMatch?.suggested_price;
 
-  const handleThumbsUp = (match: QuoteMatch) => {
-    setFeedbackRating(1);
-    setSelectedMatchId(match.match_id);
-    setSelectedSuggestedPrice(match.suggested_price);
-    setShowFeedbackDialog(true);
+  const handleThumbsUp = () => {
+    if (quote.ai_recommended_price !== null) {
+      setFeedbackRating(1);
+      setSelectedSuggestedPrice(quote.ai_recommended_price);
+      setShowFeedbackDialog(true);
+    }
   };
 
-  const handleThumbsDown = (match: QuoteMatch) => {
-    setFeedbackRating(-1);
-    setSelectedMatchId(match.match_id);
-    setSelectedSuggestedPrice(match.suggested_price);
-    setShowFeedbackDialog(true);
+  const handleThumbsDown = () => {
+    if (quote.ai_recommended_price !== null) {
+      setFeedbackRating(-1);
+      setSelectedSuggestedPrice(quote.ai_recommended_price);
+      setShowFeedbackDialog(true);
+    }
   };
 
   const handleFeedbackSubmit = async (data: {
@@ -46,9 +47,7 @@ export default function QuoteCard({ quote, onFeedbackSubmit }: QuoteCardProps) {
     feedbackNotes: string | null;
     actualPriceUsed: number | null;
   }) => {
-    if (selectedMatchId) {
-      await onFeedbackSubmit(selectedMatchId, data);
-    }
+    await onFeedbackSubmit(quote.quote_id, data);
   };
 
   return (
@@ -170,17 +169,17 @@ export default function QuoteCard({ quote, onFeedbackSubmit }: QuoteCardProps) {
                   <Eye className="w-4 h-4" />
                   View Matches ({quote.matches?.length || 0})
                 </button>
-                {topMatch && (
+                {quote.ai_recommended_price !== null && (
                   <>
                     <button
-                      onClick={() => handleThumbsUp(topMatch)}
+                      onClick={() => handleThumbsUp()}
                       className="p-2 bg-white border border-outlook-border rounded-lg hover:bg-green-50 hover:border-green-300 transition-colors"
                       title="Good suggestion"
                     >
                       <ThumbsUp className="w-4 h-4 text-green-600" />
                     </button>
                     <button
-                      onClick={() => handleThumbsDown(topMatch)}
+                      onClick={() => handleThumbsDown()}
                       className="p-2 bg-white border border-outlook-border rounded-lg hover:bg-red-50 hover:border-red-300 transition-colors"
                       title="Poor suggestion"
                     >
@@ -234,14 +233,13 @@ export default function QuoteCard({ quote, onFeedbackSubmit }: QuoteCardProps) {
         quoteId={quote.quote_id}
       />
 
-      {selectedMatchId && (
+      {showFeedbackDialog && (
         <FeedbackDialog
           isOpen={showFeedbackDialog}
           onClose={() => {
             setShowFeedbackDialog(false);
-            setSelectedMatchId(null);
           }}
-          matchId={selectedMatchId}
+          quoteId={quote.quote_id}
           suggestedPrice={selectedSuggestedPrice}
           rating={feedbackRating}
           onSubmit={handleFeedbackSubmit}

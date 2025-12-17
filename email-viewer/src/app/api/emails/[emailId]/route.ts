@@ -31,6 +31,7 @@ export async function GET(
       `SELECT
         q.*,
         -- AI Pricing Recommendations
+        apr.id as ai_price_id,
         apr.ai_recommended_price,
         apr.ai_reasoning,
         apr.confidence as ai_confidence,

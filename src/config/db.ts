@@ -16,7 +16,7 @@ import type {
   ProcessingStats,
   ShippingEmail,
   QuoteMatch,
-  MatchFeedback,
+  AIPriceFeedback,
   FeedbackStatistics,
   FeedbackByReason,
   CriteriaPerformance,
@@ -851,11 +851,12 @@ async function getMatchesForQuote(
         fb.avg_rating
       FROM quote_matches m
       INNER JOIN shipping_quotes q ON m.matched_quote_id = q.quote_id
+      LEFT JOIN ai_pricing_recommendations apr ON m.source_quote_id = apr.quote_id
       LEFT JOIN (
-        SELECT match_id, COUNT(*) as feedback_count, AVG(rating) as avg_rating
-        FROM quote_match_feedback
-        GROUP BY match_id
-      ) fb ON m.match_id = fb.match_id
+        SELECT ai_price_id, COUNT(*) as feedback_count, AVG(rating) as avg_rating
+        FROM quote_ai_price_feedback
+        GROUP BY ai_price_id
+      ) fb ON apr.id = fb.ai_price_id
       WHERE m.source_quote_id = $1 AND m.similarity_score >= $2
       ORDER BY m.similarity_score DESC
       LIMIT $3`,
@@ -919,7 +920,7 @@ async function deleteMatch(matchId: string | number): Promise<boolean> {
 // =====================================================
 
 interface SubmitFeedbackData {
-  matchId: number;
+  aiPriceId: number;
   userId?: string | null;
   rating: 1 | -1;
   feedbackReason?: string | null;
@@ -928,13 +929,13 @@ interface SubmitFeedbackData {
 }
 
 /**
- * Submit feedback for a match
+ * Submit feedback for an AI pricing recommendation
  */
-async function submitMatchFeedback(feedbackData: SubmitFeedbackData): Promise<MatchFeedback> {
+async function submitAIPriceFeedback(feedbackData: SubmitFeedbackData): Promise<AIPriceFeedback> {
   const client = await pool.connect();
   try {
     const {
-      matchId,
+      aiPriceId,
       userId = null,
       rating,
       feedbackReason = null,
@@ -943,10 +944,10 @@ async function submitMatchFeedback(feedbackData: SubmitFeedbackData): Promise<Ma
     } = feedbackData;
 
     const result = await client.query(
-      `INSERT INTO quote_match_feedback (
-        match_id, user_id, rating, feedback_reason, feedback_notes, actual_price_used
+      `INSERT INTO quote_ai_price_feedback (
+        ai_price_id, user_id, rating, feedback_reason, feedback_notes, actual_price_used
       ) VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (match_id, user_id)
+      ON CONFLICT (ai_price_id, user_id)
       DO UPDATE SET
         rating = EXCLUDED.rating,
         feedback_reason = EXCLUDED.feedback_reason,
@@ -954,7 +955,7 @@ async function submitMatchFeedback(feedbackData: SubmitFeedbackData): Promise<Ma
         actual_price_used = EXCLUDED.actual_price_used,
         created_at = NOW()
       RETURNING *`,
-      [matchId, userId, rating, feedbackReason, feedbackNotes, actualPriceUsed]
+      [aiPriceId, userId, rating, feedbackReason, feedbackNotes, actualPriceUsed]
     );
 
     return result.rows[0];
@@ -964,16 +965,16 @@ async function submitMatchFeedback(feedbackData: SubmitFeedbackData): Promise<Ma
 }
 
 /**
- * Get feedback for a match
+ * Get feedback for an AI pricing recommendation
  */
-async function getFeedbackForMatch(matchId: string | number): Promise<MatchFeedback[]> {
+async function getFeedbackForAIPrice(aiPriceId: string | number): Promise<AIPriceFeedback[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(
-      `SELECT * FROM quote_match_feedback
-      WHERE match_id = $1
+      `SELECT * FROM quote_ai_price_feedback
+      WHERE ai_price_id = $1
       ORDER BY created_at DESC`,
-      [matchId]
+      [aiPriceId]
     );
     return result.rows;
   } finally {
@@ -1023,13 +1024,13 @@ async function getFeedbackStatistics(filters: FeedbackFilters = {}): Promise<Fee
         COUNT(CASE WHEN f.rating = 1 THEN 1 END) as thumbs_up,
         COUNT(CASE WHEN f.rating = -1 THEN 1 END) as thumbs_down,
         ROUND(AVG(f.rating)::numeric, 4) as avg_rating,
-        ROUND(AVG(m.similarity_score)::numeric, 4) as avg_similarity_score,
+        ROUND(AVG(apr.confidence::text::numeric)::numeric, 4) as avg_similarity_score,
         COUNT(CASE WHEN f.rating = 1 THEN 1 END)::float / NULLIF(COUNT(*), 0) as approval_rate,
         ROUND(AVG(CASE WHEN f.actual_price_used IS NOT NULL
-          THEN ABS(m.suggested_price - f.actual_price_used) END)::numeric, 2) as avg_price_error,
+          THEN ABS(apr.ai_recommended_price - f.actual_price_used) END)::numeric, 2) as avg_price_error,
         COUNT(f.actual_price_used) as price_feedback_count
-      FROM quote_match_feedback f
-      INNER JOIN quote_matches m ON f.match_id = m.match_id
+      FROM quote_ai_price_feedback f
+      INNER JOIN ai_pricing_recommendations apr ON f.ai_price_id = apr.id
       ${whereClause}`,
       params
     );
@@ -1051,7 +1052,7 @@ async function getFeedbackByReason(): Promise<FeedbackByReason[]> {
         feedback_reason,
         rating,
         COUNT(*) as count
-      FROM quote_match_feedback
+      FROM quote_ai_price_feedback
       WHERE feedback_reason IS NOT NULL
       GROUP BY feedback_reason, rating
       ORDER BY count DESC`
@@ -1063,7 +1064,7 @@ async function getFeedbackByReason(): Promise<FeedbackByReason[]> {
 }
 
 /**
- * Get match criteria performance
+ * Get match criteria performance based on AI price feedback
  */
 async function getMatchCriteriaPerformance(): Promise<CriteriaPerformance[]> {
   const client = await pool.connect();
@@ -1078,8 +1079,9 @@ async function getMatchCriteriaPerformance(): Promise<CriteriaPerformance[]> {
         AVG((m.match_criteria->>'service_type')::numeric) as avg_service_type_score,
         AVG(m.similarity_score) as avg_overall_score,
         COUNT(*) as sample_count
-      FROM quote_match_feedback f
-      INNER JOIN quote_matches m ON f.match_id = m.match_id
+      FROM quote_ai_price_feedback f
+      INNER JOIN ai_pricing_recommendations apr ON f.ai_price_id = apr.id
+      INNER JOIN quote_matches m ON apr.quote_id = m.source_quote_id
       GROUP BY f.rating`
     );
 
@@ -1253,17 +1255,17 @@ interface QuoteFeedbackData {
 
 /**
  * Get feedback data for historical quotes used in matching
- * This queries the quote_matches_with_feedback view and quote_match_feedback table
+ * This queries the ai_pricing_recommendations and quote_ai_price_feedback tables
  */
 async function getFeedbackForHistoricalQuotes(quoteIds: number[]): Promise<Map<number, QuoteFeedbackData>> {
   if (quoteIds.length === 0) return new Map();
 
   const client = await pool.connect();
   try {
-    // Get aggregated feedback for quotes that have been matched against
+    // Get aggregated feedback for quotes that have AI pricing recommendations
     const result = await client.query(
       `SELECT
-        m.matched_quote_id as quote_id,
+        apr.quote_id as quote_id,
         COUNT(f.feedback_id) as total_feedback_count,
         COUNT(CASE WHEN f.rating = 1 THEN 1 END) as positive_feedback_count,
         COUNT(CASE WHEN f.rating = -1 THEN 1 END) as negative_feedback_count,
@@ -1271,10 +1273,10 @@ async function getFeedbackForHistoricalQuotes(quoteIds: number[]): Promise<Map<n
         ARRAY_AGG(DISTINCT f.feedback_reason) FILTER (WHERE f.feedback_reason IS NOT NULL) as feedback_reasons,
         ARRAY_AGG(f.feedback_notes) FILTER (WHERE f.feedback_notes IS NOT NULL) as feedback_notes,
         ARRAY_AGG(f.actual_price_used) FILTER (WHERE f.actual_price_used IS NOT NULL) as actual_prices_used
-      FROM quote_matches m
-      INNER JOIN quote_match_feedback f ON m.match_id = f.match_id
-      WHERE m.matched_quote_id = ANY($1::int[])
-      GROUP BY m.matched_quote_id`,
+      FROM ai_pricing_recommendations apr
+      INNER JOIN quote_ai_price_feedback f ON apr.id = f.ai_price_id
+      WHERE apr.quote_id = ANY($1::int[])
+      GROUP BY apr.quote_id`,
       [quoteIds]
     );
 
@@ -1954,9 +1956,9 @@ export {
   getMatchesForQuote,
   getMatchById,
   deleteMatch,
-  // Match feedback
-  submitMatchFeedback,
-  getFeedbackForMatch,
+  // AI Price feedback
+  submitAIPriceFeedback,
+  getFeedbackForAIPrice,
   getFeedbackStatistics,
   getFeedbackByReason,
   getMatchCriteriaPerformance,

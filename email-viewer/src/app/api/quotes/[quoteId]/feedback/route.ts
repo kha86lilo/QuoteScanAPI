@@ -2,26 +2,25 @@ import { NextResponse } from 'next/server';
 import pool from '@/lib/db';
 
 /**
- * Submit feedback for an AI pricing recommendation
- * POST /api/matches/[matchId]/feedback
- * Body: { aiPriceId, userId?, rating, feedbackReason?, feedbackNotes?, actualPriceUsed? }
+ * Submit feedback for an AI pricing recommendation on a quote
+ * POST /api/quotes/[quoteId]/feedback
+ * Body: { userId?, rating, feedbackReason?, feedbackNotes?, actualPriceUsed? }
  */
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ matchId: string }> }
+  { params }: { params: Promise<{ quoteId: string }> }
 ) {
-  const { matchId: matchIdParam } = await params;
-  const matchId = parseInt(matchIdParam);
+  const { quoteId: quoteIdParam } = await params;
+  const quoteId = parseInt(quoteIdParam);
 
-  if (isNaN(matchId)) {
-    return NextResponse.json({ error: 'Invalid match ID' }, { status: 400 });
+  if (isNaN(quoteId)) {
+    return NextResponse.json({ error: 'Invalid quote ID' }, { status: 400 });
   }
 
   const client = await pool.connect();
   try {
     const body = await request.json();
     const {
-      aiPriceId,
       userId = null,
       rating,
       feedbackReason = null,
@@ -33,9 +32,17 @@ export async function POST(
       return NextResponse.json({ error: 'Rating must be 1 (thumbs up) or -1 (thumbs down)' }, { status: 400 });
     }
 
-    if (!aiPriceId) {
-      return NextResponse.json({ error: 'aiPriceId is required - feedback is now linked to AI pricing recommendations' }, { status: 400 });
+    // Get the AI pricing recommendation ID for this quote
+    const aiPriceResult = await client.query(
+      `SELECT id FROM ai_pricing_recommendations WHERE quote_id = $1`,
+      [quoteId]
+    );
+
+    if (aiPriceResult.rows.length === 0) {
+      return NextResponse.json({ error: 'No AI pricing recommendation found for this quote' }, { status: 404 });
     }
+
+    const aiPriceId = aiPriceResult.rows[0].id;
 
     const result = await client.query(
       `INSERT INTO quote_ai_price_feedback (
@@ -62,39 +69,33 @@ export async function POST(
 }
 
 /**
- * Get feedback for an AI pricing recommendation associated with a match
- * GET /api/matches/[matchId]/feedback
+ * Get feedback for an AI pricing recommendation on a quote
+ * GET /api/quotes/[quoteId]/feedback
  */
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ matchId: string }> }
+  { params }: { params: Promise<{ quoteId: string }> }
 ) {
-  const { matchId: matchIdParam } = await params;
-  const matchId = parseInt(matchIdParam);
+  const { quoteId: quoteIdParam } = await params;
+  const quoteId = parseInt(quoteIdParam);
 
-  if (isNaN(matchId)) {
-    return NextResponse.json({ error: 'Invalid match ID' }, { status: 400 });
+  if (isNaN(quoteId)) {
+    return NextResponse.json({ error: 'Invalid quote ID' }, { status: 400 });
   }
 
   const client = await pool.connect();
   try {
-    // Get the match to find the source quote, then get the AI pricing recommendation
-    const matchResult = await client.query(
-      `SELECT m.source_quote_id, apr.id as ai_price_id
-       FROM quote_matches m
-       LEFT JOIN ai_pricing_recommendations apr ON m.source_quote_id = apr.quote_id
-       WHERE m.match_id = $1`,
-      [matchId]
+    // Get the AI pricing recommendation ID for this quote
+    const aiPriceResult = await client.query(
+      `SELECT id FROM ai_pricing_recommendations WHERE quote_id = $1`,
+      [quoteId]
     );
 
-    if (matchResult.rows.length === 0) {
-      return NextResponse.json({ error: 'Match not found' }, { status: 404 });
-    }
-
-    const aiPriceId = matchResult.rows[0].ai_price_id;
-    if (!aiPriceId) {
+    if (aiPriceResult.rows.length === 0) {
       return NextResponse.json([]);
     }
+
+    const aiPriceId = aiPriceResult.rows[0].id;
 
     const result = await client.query(
       `SELECT * FROM quote_ai_price_feedback

@@ -56,9 +56,9 @@ export interface QuoteMatch {
   matched_quote?: ShippingQuote;
 }
 
-export interface QuoteMatchFeedback {
+export interface QuoteAIPriceFeedback {
   feedback_id: number;
-  match_id: number;
+  ai_price_id: number;
   user_id: string | null;
   rating: number;
   feedback_reason: string | null;
@@ -66,6 +66,9 @@ export interface QuoteMatchFeedback {
   actual_price_used: number | null;
   created_at: string;
 }
+
+/** @deprecated Use QuoteAIPriceFeedback instead - table renamed to quote_ai_price_feedback */
+export type QuoteMatchFeedback = QuoteAIPriceFeedback;
 
 export interface EmailAttachment {
   id: string;
@@ -86,6 +89,7 @@ export interface QuoteWithMatches extends ShippingQuote {
   top_suggested_price: number | null;
   avg_suggested_price: number | null;
   // AI Pricing Recommendations
+  ai_price_id: number | null;
   ai_recommended_price: number | null;
   ai_reasoning: string | null;
   ai_confidence: string | null;
@@ -102,4 +106,93 @@ export interface PaginatedEmailsResponse {
   limit: number;
   offset: number;
   minDate: string;
+}
+
+// Dashboard Types
+export interface DashboardPricingReply {
+  staff_quote_reply_id: number;
+  is_pricing_email: boolean;
+  confidence_score: number;
+  quoted_price: number | null;
+  currency: string | null;
+  price_type: string | null;
+  origin: string | null;
+  destination: string | null;
+  service_type: string | null;
+  cargo_description: string | null;
+  cargo_weight: number | null;
+  weight_unit: string | null;
+  transit_time: string | null;
+  notes: string | null;
+}
+
+export interface DashboardStaffReply {
+  reply_id: number;
+  staff_sender_name: string | null;
+  staff_sender_email: string | null;
+  staff_subject: string | null;
+  staff_body_preview: string | null;
+  staff_received_date: string | null;
+  staff_has_attachments: boolean | null;
+  pricing_replies: DashboardPricingReply[] | null;
+}
+
+export interface DashboardQuote {
+  quote_id: number;
+  client_company_name: string | null;
+  origin_city: string | null;
+  origin_country: string | null;
+  destination_city: string | null;
+  destination_country: string | null;
+  cargo_description: string | null;
+  cargo_weight: number | null;
+  weight_unit: string | null;
+  service_type: string | null;
+  initial_quote_amount: number | null;
+  final_agreed_price: number | null;
+  quote_status: string | null;
+  quote_created_at: string | null;
+}
+
+export interface DashboardEmail {
+  email_id: number;
+  email_message_id: string;
+  conversation_id: string | null;
+  email_subject: string;
+  email_received_date: string;
+  email_sender_name: string;
+  email_sender_email: string;
+  email_body_preview: string;
+  email_has_attachments: boolean;
+  quotes: DashboardQuote[] | null;
+  staff_replies: DashboardStaffReply[] | null;
+  response_time_minutes: number | null;
+  first_reply_date: string | null;
+}
+
+export interface DashboardStatistics {
+  totalEmails: number;
+  emailsWithReplies: number;
+  totalQuotes: number;
+  pendingQuotes: number;
+  approvedQuotes: number;
+  rejectedQuotes: number;
+  wonQuotes: number;
+  totalStaffReplies: number;
+  pricingReplies: number;
+  avgResponseMinutes: number;
+  serviceTypeDistribution: Array<{ service_type: string; count: number }>;
+  responseTimeDistribution: Array<{ range: string; count: number }>;
+  topSenders: Array<{ email_sender_email: string; email_sender_name: string; count: number }>;
+  emailsByMonth: Array<{ month: string; count: number }>;
+}
+
+export interface DashboardResponse {
+  emails: DashboardEmail[];
+  totalCount: number;
+  totalPages: number;
+  currentPage: number;
+  limit: number;
+  filterWithReplies?: boolean;
+  statistics: DashboardStatistics;
 }

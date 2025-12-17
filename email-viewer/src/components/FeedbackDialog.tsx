@@ -6,7 +6,7 @@ import { X, ThumbsUp, ThumbsDown, DollarSign } from 'lucide-react';
 interface FeedbackDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  matchId: number;
+  quoteId: number;
   suggestedPrice: number | null;
   rating: 1 | -1;
   onSubmit: (data: {
@@ -36,7 +36,7 @@ const FEEDBACK_REASONS = {
 export default function FeedbackDialog({
   isOpen,
   onClose,
-  matchId,
+  quoteId,
   suggestedPrice,
   rating,
   onSubmit,
@@ -95,7 +95,7 @@ export default function FeedbackDialog({
                 <h2 className="text-lg font-semibold text-outlook-text">
                   {rating === 1 ? 'Positive Feedback' : 'Negative Feedback'}
                 </h2>
-                <p className="text-sm text-outlook-textLight">Match #{matchId}</p>
+                <p className="text-sm text-outlook-textLight">Quote #{quoteId}</p>
               </div>
             </div>
             <button

@@ -73,6 +73,7 @@ interface FeedbackBody {
   feedbackNotes?: string;
   actualPriceUsed?: number;
   userId?: string;
+  aiPriceId?: number;
 }
 
 interface FeedbackStatsQuery {
@@ -293,12 +294,14 @@ export const deleteMatch = asyncHandler(async (req: Request, res: Response) => {
 // =====================================================
 
 /**
- * Submit feedback for a match
+ * Submit feedback for an AI pricing recommendation
  * POST /api/matches/:matchId/feedback
+ * Note: matchId is kept for backward compatibility, but feedback is now linked to AI pricing recommendations
+ * Body should include aiPriceId for the AI pricing recommendation to give feedback on
  */
 export const submitFeedback = asyncHandler(async (req: Request, res: Response) => {
   const { matchId } = req.params;
-  const { rating, feedbackReason, feedbackNotes, actualPriceUsed, userId } =
+  const { rating, feedbackReason, feedbackNotes, actualPriceUsed, userId, aiPriceId } =
     req.body as FeedbackBody;
 
   // Validation
@@ -312,15 +315,20 @@ export const submitFeedback = asyncHandler(async (req: Request, res: Response) =
     );
   }
 
-  // Verify match exists
+  // aiPriceId is required for the new schema
+  if (!aiPriceId) {
+    throw new ValidationError('aiPriceId is required - feedback is now linked to AI pricing recommendations');
+  }
+
+  // Verify match exists (for backward compatibility check)
   const match = await db.getMatchById(matchId);
   if (!match) {
     throw new NotFoundError(`Match with ID: ${matchId}`);
   }
 
   try {
-    const feedback = await db.submitMatchFeedback({
-      matchId: parseInt(matchId),
+    const feedback = await db.submitAIPriceFeedback({
+      aiPriceId,
       userId,
       rating,
       feedbackReason,
@@ -341,20 +349,41 @@ export const submitFeedback = asyncHandler(async (req: Request, res: Response) =
 /**
  * Get feedback for a specific match
  * GET /api/matches/:matchId/feedback
+ * Note: Retrieves feedback for the AI pricing recommendation associated with the match's source quote
  */
 export const getFeedbackForMatch = asyncHandler(async (req: Request, res: Response) => {
   const { matchId } = req.params;
 
   try {
-    const feedback = await db.getFeedbackForMatch(matchId);
+    // Get the match to find the source quote
+    const match = await db.getMatchById(matchId);
+    if (!match) {
+      throw new NotFoundError(`Match with ID: ${matchId}`);
+    }
+
+    // Get the AI pricing recommendation for the source quote
+    const aiPricing = await db.getAIPricingRecommendation(match.source_quote_id);
+    if (!aiPricing || !aiPricing.id) {
+      return res.json({
+        success: true,
+        matchId: parseInt(matchId),
+        count: 0,
+        feedback: [],
+        message: 'No AI pricing recommendation found for this match',
+      });
+    }
+
+    const feedback = await db.getFeedbackForAIPrice(aiPricing.id);
 
     res.json({
       success: true,
       matchId: parseInt(matchId),
+      aiPriceId: aiPricing.id,
       count: feedback.length,
       feedback,
     });
   } catch (error) {
+    if (error instanceof NotFoundError) throw error;
     throw new DatabaseError('fetching feedback for match', error as Error);
   }
 });
