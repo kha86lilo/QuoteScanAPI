@@ -172,12 +172,12 @@ For any GROUND shipment over 500 miles, you MUST follow these steps. This is not
 1.  **CALCULATE FIRST**: Use the per-mile rates and fuel surcharge guidelines to calculate a price based on the provided distance.
 2.  **COMPARE TO HISTORICAL AVERAGE**: Look at the average price of the historical matches.
 3.  **APPLY THE 30% RULE**:
-    - **IF** your calculated price is more than 30% higher than the historical average, you **MUST DISCARD** the historical matches.
-    - In your reasoning, you MUST state: "Calculated price of [Your Price] is over 30% higher than the historical average of [Historical Avg]. Per critical instruction, historical data is being ignored as non-representative."
-    - Your final recommended price will be based on your calculation, not the historical data.
-4.  **IF THE RULE DOES NOT APPLY**: If your price is within the 30% threshold, you may use the historical data as a secondary reference, but your calculation should still be the primary driver of your final quote.
+    - **IF** your calculated price is more than 30% higher than the historical average, the historical matches may represent different market conditions, shorter distances, or different cargo requirements.
+    - Base your price primarily on your calculated rate for the current shipment specifications.
+    - In your negotiation_notes, explain the pricing rationale naturally, e.g.: "This quote reflects current market rates for [distance] miles. Historical data showed lower prices but for shorter distances/different cargo requirements."
+4.  **IF THE RULE DOES NOT APPLY**: If your price is within the 30% threshold, you may blend historical data with your calculation for a more data-driven quote.
 
-This rule is in place to prevent outlier historical data from incorrectly influencing prices on long-haul lanes.
+This ensures pricing accuracy when historical comparables don't match current shipment characteristics.
 
 ### Ocean Freight
 - Container type premiums (flat rack +50-100%, reefer +30-50%)
