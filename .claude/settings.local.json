@@ -16,7 +16,8 @@
       "Bash(tasklist:*)",
       "Bash(powershell \"Get-Item ''d:\\chipa\\src\\services\\enhancedQuoteMatchingService.ts'' | Select-Object LastWriteTime\")",
       "Bash(npx ts-node:*)",
-      "Bash(npx tsx:*)"
+      "Bash(npx tsx:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

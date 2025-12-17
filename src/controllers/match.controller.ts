@@ -1038,7 +1038,7 @@ export const getSmartPricing = asyncHandler(async (req: Request, res: Response) 
 export const runAllMatching = asyncHandler(async (req: Request, res: Response) => {
   const {
     startDate,
-    minScore = 0.3,
+    minScore = 0.65,
     maxMatches = 10,
     useAI = true,
     limit = 1000,

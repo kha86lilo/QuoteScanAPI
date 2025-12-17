@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { EmailWithQuotes, QuoteWithMatches } from '@/types';
-import { Mail, Calendar, Paperclip, Building, Eye, ThumbsUp, ThumbsDown, AlertTriangle, FileDown } from 'lucide-react';
+import { Mail, Calendar, Paperclip, Building, Eye, ThumbsUp, ThumbsDown, AlertTriangle, FileDown, Info } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import Attachments from './Attachments';
 import MatchesDialog from './MatchesDialog';
@@ -34,6 +34,7 @@ function formatFullDate(dateString: string): string {
 export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: EmailDetailsProps) {
   const [showMatchesDialog, setShowMatchesDialog] = useState(false);
   const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
+  const [showPriceReasoningDialog, setShowPriceReasoningDialog] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState<1 | -1>(1);
   const [selectedQuote, setSelectedQuote] = useState<QuoteWithMatches | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<number | null>(null);
@@ -82,6 +83,110 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
   const formatPrice = (price: number | null) => {
     if (price === null) return '-';
     return Number(price).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  // Price reasoning dialog component
+  const PriceReasoningDialog = ({ quote, isOpen, onClose }: { quote: QuoteWithMatches; isOpen: boolean; onClose: () => void }) => {
+    if (!isOpen) return null;
+
+    const confidenceColor = quote.ai_confidence === 'high'
+      ? 'text-green-700'
+      : quote.ai_confidence === 'medium'
+        ? 'text-yellow-700'
+        : 'text-red-700';
+
+    const confidenceBg = quote.ai_confidence === 'high'
+      ? 'bg-green-100'
+      : quote.ai_confidence === 'medium'
+        ? 'bg-yellow-100'
+        : 'bg-red-100';
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+        <div
+          className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 rounded-lg p-2">
+                  <Info className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">AI Price Recommendation</h3>
+                  <p className="text-blue-100 text-sm">Quote #{quote.quote_id}</p>
+                </div>
+              </div>
+              <button
+                onClick={onClose}
+                className="text-white/80 hover:text-white hover:bg-white/20 rounded-lg p-1.5 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="p-6 space-y-5">
+            {/* Recommended Price */}
+            <div className="text-center py-4 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-600 font-medium mb-1">Recommended Price</p>
+              <p className="text-3xl font-bold text-blue-700">{formatPrice(quote.ai_recommended_price)}</p>
+              {quote.ai_confidence && (
+                <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold ${confidenceBg} ${confidenceColor}`}>
+                  {quote.ai_confidence.charAt(0).toUpperCase() + quote.ai_confidence.slice(1)} Confidence
+                </span>
+              )}
+            </div>
+
+            {/* Price Range */}
+            {(quote.floor_price || quote.ceiling_price || quote.target_price) && (
+              <div className="bg-gray-50 rounded-xl p-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Price Range</p>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center p-3 bg-white rounded-lg border border-gray-200">
+                    <p className="text-xs text-gray-500 mb-1">Floor</p>
+                    <p className="text-lg font-semibold text-green-600">{formatPrice(quote.floor_price)}</p>
+                  </div>
+                  <div className="text-center p-3 bg-white rounded-lg border-2 border-blue-200">
+                    <p className="text-xs text-gray-500 mb-1">Target</p>
+                    <p className="text-lg font-semibold text-blue-600">{formatPrice(quote.target_price)}</p>
+                  </div>
+                  <div className="text-center p-3 bg-white rounded-lg border border-gray-200">
+                    <p className="text-xs text-gray-500 mb-1">Ceiling</p>
+                    <p className="text-lg font-semibold text-amber-600">{formatPrice(quote.ceiling_price)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Reasoning */}
+            {quote.ai_reasoning && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">AI Reasoning</p>
+                <div className="bg-gray-50 rounded-xl p-4 max-h-48 overflow-y-auto">
+                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{quote.ai_reasoning}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-100">
+            <button
+              onClick={onClose}
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const exportProforma = (quote: QuoteWithMatches) => {
@@ -375,9 +480,18 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
                       <td className="px-3 py-2 text-outlook-text">{quote.service_type || '-'}</td>
                       <td className="px-3 py-2 text-center">
                         {suggestedPrice ? (
-                          <span className="inline-block px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm">
+                          <button
+                            onClick={() => {
+                              setSelectedQuote(quote);
+                              setShowPriceReasoningDialog(true);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm hover:bg-blue-200 transition-colors cursor-pointer"
+                          >
                             {formatPrice(suggestedPrice)}
-                          </span>
+                            {quote.ai_reasoning && (
+                              <Info className="w-3.5 h-3.5 text-blue-500" />
+                            )}
+                          </button>
                         ) : (
                           <span className="text-outlook-textLight">-</span>
                         )}
@@ -456,6 +570,16 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
           suggestedPrice={selectedSuggestedPrice}
           rating={feedbackRating}
           onSubmit={handleFeedbackSubmit}
+        />
+      )}
+
+      {selectedQuote && (
+        <PriceReasoningDialog
+          quote={selectedQuote}
+          isOpen={showPriceReasoningDialog}
+          onClose={() => {
+            setShowPriceReasoningDialog(false);
+          }}
         />
       )}
 

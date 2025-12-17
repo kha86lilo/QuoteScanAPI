@@ -1,0 +1,113 @@
+{
+  "trailerConfigs": [
+    {
+      "id": "flatbed",
+      "name": "Flatbed",
+      "category": "flatbed",
+      "deckLength": 48,
+      "deckWidth": 8.5,
+      "deckHeight": 5,
+      "maxCargoHeight": 8.5,
+      "maxWeight": 48000,
+      "bestFor": ["Building materials", "Steel", "Lumber", "Machinery"]
+    },
+    {
+      "id": "step_deck",
+      "name": "Step Deck (Drop Deck)",
+      "category": "step_deck",
+      "deckLength": 48,
+      "deckWidth": 8.5,
+      "deckHeight": 3.5,
+      "maxCargoHeight": 10,
+      "maxWeight": 48000,
+      "bestFor": ["Tall equipment", "Farm equipment", "Construction equipment"]
+    },
+    {
+      "id": "rgn",
+      "name": "RGN (Removable Gooseneck)",
+      "category": "rgn",
+      "deckLength": 48,
+      "deckWidth": 8.5,
+      "deckHeight": 2,
+      "maxCargoHeight": 11.5,
+      "maxWeight": 42000,
+      "bestFor": ["Track equipment", "Non-running machinery", "Heavy equipment"]
+    },
+    {
+      "id": "lowboy",
+      "name": "Lowboy",
+      "category": "lowboy",
+      "deckLength": 24,
+      "deckWidth": 8.5,
+      "deckHeight": 1.5,
+      "maxCargoHeight": 12,
+      "maxWeight": 40000,
+      "bestFor": ["Very tall equipment", "Construction machinery", "Excavators"]
+    },
+    {
+      "id": "double_drop",
+      "name": "Double Drop",
+      "category": "double_drop",
+      "deckLength": 48,
+      "deckWidth": 8.5,
+      "deckHeight": 2,
+      "maxCargoHeight": 11.5,
+      "maxWeight": 45000,
+      "bestFor": ["Long + tall loads", "Industrial equipment", "Transformers"]
+    },
+    {
+      "id": "dry_van",
+      "name": "Dry Van",
+      "category": "enclosed",
+      "deckLength": 53,
+      "deckWidth": 8.5,
+      "deckHeight": 9,
+      "maxCargoHeight": 9,
+      "maxWeight": 45000,
+      "bestFor": ["General freight", "Palletized goods", "Weather-sensitive cargo", "Consumer goods"]
+    },
+    {
+      "id": "reefer",
+      "name": "Reefer (Refrigerated)",
+      "category": "reefer",
+      "deckLength": 53,
+      "deckWidth": 8.5,
+      "deckHeight": 9,
+      "maxCargoHeight": 9,
+      "maxWeight": 44000,
+      "bestFor": ["Perishable foods", "Frozen goods", "Pharmaceuticals", "Temperature-sensitive cargo"]
+    },
+    {
+      "id": "conestoga",
+      "name": "Conestoga",
+      "category": "flatbed_covered",
+      "deckLength": 48,
+      "deckWidth": 8.5,
+      "deckHeight": 5,
+      "maxCargoHeight": 8.5,
+      "maxWeight": 46000,
+      "bestFor": ["Weather-sensitive flatbed cargo", "Coils", "Paper products", "Side-loading freight"]
+    },
+    {
+      "id": "hotshot",
+      "name": "Hotshot",
+      "category": "hotshot",
+      "deckLength": 40,
+      "deckWidth": 8.5,
+      "deckHeight": 2,
+      "maxCargoHeight": 8.5,
+      "maxWeight": 16500,
+      "bestFor": ["Expedited shipments", "Smaller machinery", "Oil field equipment", "LTL freight"]
+    }
+  ],
+  "legalLimits": {
+    "maxHeight": 13.5,
+    "maxWidth": 8.5,
+    "maxLength": 53,
+    "maxWeight": 80000,
+    "units": {
+      "dimensions": "feet",
+      "weight": "lbs"
+    }
+  }
+}

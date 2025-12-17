@@ -21,6 +21,41 @@ import type {
   PriceRange,
   MatchMetadata,
 } from '../types/index.js';
+import trailerConfigsData from '../config/trailerConfigs.json' with { type: 'json' };
+
+// Trailer configuration types
+interface TrailerConfig {
+  id: string;
+  name: string;
+  category: string;
+  deckLength: number;  // feet
+  deckWidth: number;   // feet
+  deckHeight: number;  // feet (deck height from ground)
+  maxCargoHeight: number;  // feet (max cargo height that fits)
+  maxWeight: number;   // lbs
+  bestFor: string[];
+}
+
+interface LegalLimits {
+  maxHeight: number;   // feet (total height including trailer)
+  maxWidth: number;    // feet
+  maxLength: number;   // feet
+  maxWeight: number;   // lbs (total gross weight)
+  units: {
+    dimensions: string;
+    weight: string;
+  };
+}
+
+interface TrailerConfigsFile {
+  trailerConfigs: TrailerConfig[];
+  legalLimits: LegalLimits;
+}
+
+// Load trailer configurations
+const trailerConfigs: TrailerConfigsFile = trailerConfigsData as TrailerConfigsFile;
+const TRAILER_CONFIGS = trailerConfigs.trailerConfigs;
+const LEGAL_LIMITS = trailerConfigs.legalLimits;
 
 // Service Type Normalization
 const SERVICE_TYPE_MAPPING: Record<string, string> = {
@@ -584,9 +619,124 @@ const CONTAINER_PRICING_MULTIPLIERS: Record<string, number> = {
 };
 
 /**
- * Check if cargo is OOG (Out of Gauge) based on description and dimensions
+ * Convert dimension value to feet, handling various units
+ * Default assumes inches if no unit specified and value > 20
  */
-function isOOGCargo(description: string | null | undefined, height: number | string | null | undefined, width: number | string | null | undefined): boolean {
+function convertToFeet(value: number | string | null | undefined, unit?: string | null): number | null {
+  if (value === null || value === undefined) return null;
+  const numValue = typeof value === 'string' ? parseFloat(value) : value;
+  if (isNaN(numValue) || numValue <= 0) return null;
+
+  const normalizedUnit = (unit || '').toLowerCase().trim();
+
+  // If unit is specified, use it
+  if (normalizedUnit.includes('ft') || normalizedUnit.includes('feet') || normalizedUnit === "'") {
+    return numValue;
+  }
+  if (normalizedUnit.includes('in') || normalizedUnit === '"') {
+    return numValue / 12;
+  }
+  if (normalizedUnit.includes('m') && !normalizedUnit.includes('mm')) {
+    return numValue * 3.28084; // meters to feet
+  }
+  if (normalizedUnit.includes('cm')) {
+    return numValue / 30.48; // cm to feet
+  }
+  if (normalizedUnit.includes('mm')) {
+    return numValue / 304.8; // mm to feet
+  }
+
+  // No unit specified - heuristic: if > 20, assume inches; otherwise assume feet
+  // (Most cargo in feet would be < 20ft, most in inches would be > 20in)
+  if (numValue > 20) {
+    return numValue / 12; // Assume inches
+  }
+  return numValue; // Assume feet
+}
+
+/**
+ * Convert weight value to pounds, handling various units
+ */
+function convertToLbs(value: number | string | null | undefined, unit?: string | null): number | null {
+  if (value === null || value === undefined) return null;
+  const numValue = typeof value === 'string' ? parseFloat(value) : value;
+  if (isNaN(numValue) || numValue <= 0) return null;
+
+  const normalizedUnit = (unit || '').toLowerCase().trim();
+
+  if (normalizedUnit.includes('lb') || normalizedUnit.includes('pound')) {
+    return numValue;
+  }
+  if (normalizedUnit.includes('kg') || normalizedUnit.includes('kilo')) {
+    return numValue * 2.20462;
+  }
+  if (normalizedUnit.includes('ton') && !normalizedUnit.includes('metric')) {
+    return numValue * 2000; // US tons
+  }
+  if (normalizedUnit.includes('metric') || normalizedUnit === 't' || normalizedUnit === 'mt') {
+    return numValue * 2204.62; // Metric tons
+  }
+
+  // No unit - heuristic: if < 100, likely tons; if < 5000, likely kg; otherwise lbs
+  if (numValue < 100) {
+    return numValue * 2000; // Assume tons
+  }
+  if (numValue < 5000) {
+    return numValue * 2.20462; // Assume kg
+  }
+  return numValue; // Assume lbs
+}
+
+interface TrailerSuggestion {
+  trailer: TrailerConfig;
+  fitScore: number;  // Higher is better fit (0-100)
+  reasons: string[];
+  warnings: string[];
+}
+
+interface OOGAnalysis {
+  isOOG: boolean;
+  exceedsLegalHeight: boolean;
+  exceedsLegalWidth: boolean;
+  exceedsLegalLength: boolean;
+  exceedsLegalWeight: boolean;
+  requiresPermits: boolean;
+  requiresPilotCar: boolean;
+  cargoHeightFt: number | null;
+  cargoWidthFt: number | null;
+  cargoLengthFt: number | null;
+  cargoWeightLbs: number | null;
+  reasons: string[];
+}
+
+/**
+ * Analyze cargo dimensions against legal limits and trailer capabilities
+ * Uses trailer configs to determine if cargo is Out of Gauge (OOG)
+ */
+function analyzeOOGCargo(
+  description: string | null | undefined,
+  height: number | string | null | undefined,
+  width: number | string | null | undefined,
+  length: number | string | null | undefined,
+  weight: number | string | null | undefined,
+  dimensionUnit?: string | null,
+  weightUnit?: string | null
+): OOGAnalysis {
+  const result: OOGAnalysis = {
+    isOOG: false,
+    exceedsLegalHeight: false,
+    exceedsLegalWidth: false,
+    exceedsLegalLength: false,
+    exceedsLegalWeight: false,
+    requiresPermits: false,
+    requiresPilotCar: false,
+    cargoHeightFt: convertToFeet(height, dimensionUnit),
+    cargoWidthFt: convertToFeet(width, dimensionUnit),
+    cargoLengthFt: convertToFeet(length, dimensionUnit),
+    cargoWeightLbs: convertToLbs(weight, weightUnit),
+    reasons: []
+  };
+
   const text = (description || '').toLowerCase();
 
   // Check description for OOG indicators
@@ -594,16 +744,220 @@ function isOOGCargo(description: string | null | undefined, height: number | str
       text.includes('overdimensional') || text.includes('overheight') || text.includes('overwidth') ||
       text.match(/\b40\s*ot\b/) || text.includes('open top') || text.includes('open-top') ||
       text.includes('top loaded') || text.includes('top-loaded')) {
-    return true;
+    result.isOOG = true;
+    result.reasons.push('Description indicates OOG cargo');
   }
 
-  // Check dimensions (standard max height is 8.5ft/102in, max width is 8.5ft/102in)
-  const heightNum = typeof height === 'string' ? parseFloat(height) : height;
-  const widthNum = typeof width === 'string' ? parseFloat(width) : width;
-  if (heightNum && heightNum > 102) return true;  // Assuming inches
-  if (widthNum && widthNum > 102) return true;    // Assuming inches
+  // Check against legal limits from trailer configs
+  // Note: Legal max height (13.5ft) includes trailer deck height, so cargo max varies by trailer
+  if (result.cargoHeightFt !== null) {
+    // Find the lowest deck trailer (lowboy at 1.5ft) to get max possible cargo height
+    const maxPossibleCargoHeight = LEGAL_LIMITS.maxHeight - 1.5; // ~12ft with lowboy
+    if (result.cargoHeightFt > maxPossibleCargoHeight) {
+      result.exceedsLegalHeight = true;
+      result.isOOG = true;
+      result.requiresPermits = true;
+      result.reasons.push(`Height ${result.cargoHeightFt.toFixed(1)}ft exceeds legal limit even with lowest trailer`);
+    } else if (result.cargoHeightFt > 8.5) {
+      // Standard flatbed max cargo height - may need special trailer
+      result.isOOG = true;
+      result.reasons.push(`Height ${result.cargoHeightFt.toFixed(1)}ft requires low-deck trailer`);
+    }
+  }
 
-  return false;
+  if (result.cargoWidthFt !== null && result.cargoWidthFt > LEGAL_LIMITS.maxWidth) {
+    result.exceedsLegalWidth = true;
+    result.isOOG = true;
+    result.requiresPermits = true;
+    if (result.cargoWidthFt > 12) {
+      result.requiresPilotCar = true;
+      result.reasons.push(`Width ${result.cargoWidthFt.toFixed(1)}ft exceeds 12ft, requires pilot car`);
+    } else {
+      result.reasons.push(`Width ${result.cargoWidthFt.toFixed(1)}ft exceeds legal limit ${LEGAL_LIMITS.maxWidth}ft`);
+    }
+  }
+
+  if (result.cargoLengthFt !== null && result.cargoLengthFt > LEGAL_LIMITS.maxLength) {
+    result.exceedsLegalLength = true;
+    result.isOOG = true;
+    result.requiresPermits = true;
+    result.reasons.push(`Length ${result.cargoLengthFt.toFixed(1)}ft exceeds legal limit ${LEGAL_LIMITS.maxLength}ft`);
+  }
+
+  if (result.cargoWeightLbs !== null && result.cargoWeightLbs > LEGAL_LIMITS.maxWeight) {
+    result.exceedsLegalWeight = true;
+    result.isOOG = true;
+    result.requiresPermits = true;
+    result.reasons.push(`Weight ${result.cargoWeightLbs.toLocaleString()}lbs exceeds legal limit ${LEGAL_LIMITS.maxWeight.toLocaleString()}lbs`);
+  }
+
+  return result;
+}
+
+/**
+ * Suggest the best trailer(s) for given cargo dimensions and weight
+ * Returns trailers sorted by fit score (best fit first)
+ */
+function suggestTrailer(
+  height: number | string | null | undefined,
+  width: number | string | null | undefined,
+  length: number | string | null | undefined,
+  weight: number | string | null | undefined,
+  dimensionUnit?: string | null,
+  weightUnit?: string | null,
+  cargoDescription?: string | null
+): TrailerSuggestion[] {
+  const cargoHeightFt = convertToFeet(height, dimensionUnit);
+  const cargoWidthFt = convertToFeet(width, dimensionUnit);
+  const cargoLengthFt = convertToFeet(length, dimensionUnit);
+  const cargoWeightLbs = convertToLbs(weight, weightUnit);
+  const description = (cargoDescription || '').toLowerCase();
+
+  const suggestions: TrailerSuggestion[] = [];
+
+  for (const trailer of TRAILER_CONFIGS) {
+    const reasons: string[] = [];
+    const warnings: string[] = [];
+    let fitScore = 50; // Base score
+
+    // Check if cargo fits within trailer dimensions
+    let fits = true;
+
+    // Height check: cargo height + deck height must be <= legal max height
+    if (cargoHeightFt !== null) {
+      const totalHeight = cargoHeightFt + trailer.deckHeight;
+      if (totalHeight > LEGAL_LIMITS.maxHeight) {
+        fits = false;
+        warnings.push(`Cargo height ${cargoHeightFt.toFixed(1)}ft + deck ${trailer.deckHeight}ft = ${totalHeight.toFixed(1)}ft exceeds legal ${LEGAL_LIMITS.maxHeight}ft`);
+      } else if (cargoHeightFt > trailer.maxCargoHeight) {
+        fits = false;
+        warnings.push(`Cargo height ${cargoHeightFt.toFixed(1)}ft exceeds trailer max ${trailer.maxCargoHeight}ft`);
+      } else {
+        // Good fit - score higher for closer match (less wasted space)
+        const heightUtilization = cargoHeightFt / trailer.maxCargoHeight;
+        fitScore += heightUtilization * 15;
+        reasons.push(`Height OK: ${cargoHeightFt.toFixed(1)}ft fits in ${trailer.maxCargoHeight}ft max`);
+      }
+    }
+
+    // Width check
+    if (cargoWidthFt !== null) {
+      if (cargoWidthFt > trailer.deckWidth) {
+        fits = false;
+        warnings.push(`Cargo width ${cargoWidthFt.toFixed(1)}ft exceeds deck width ${trailer.deckWidth}ft`);
+      } else {
+        const widthUtilization = cargoWidthFt / trailer.deckWidth;
+        fitScore += widthUtilization * 15;
+        reasons.push(`Width OK: ${cargoWidthFt.toFixed(1)}ft fits in ${trailer.deckWidth}ft deck`);
+      }
+    }
+
+    // Length check
+    if (cargoLengthFt !== null) {
+      if (cargoLengthFt > trailer.deckLength) {
+        fits = false;
+        warnings.push(`Cargo length ${cargoLengthFt.toFixed(1)}ft exceeds deck length ${trailer.deckLength}ft`);
+      } else {
+        const lengthUtilization = cargoLengthFt / trailer.deckLength;
+        fitScore += lengthUtilization * 15;
+        reasons.push(`Length OK: ${cargoLengthFt.toFixed(1)}ft fits in ${trailer.deckLength}ft deck`);
+      }
+    }
+
+    // Weight check
+    if (cargoWeightLbs !== null) {
+      if (cargoWeightLbs > trailer.maxWeight) {
+        fits = false;
+        warnings.push(`Cargo weight ${cargoWeightLbs.toLocaleString()}lbs exceeds trailer max ${trailer.maxWeight.toLocaleString()}lbs`);
+      } else {
+        const weightUtilization = cargoWeightLbs / trailer.maxWeight;
+        fitScore += weightUtilization * 10;
+        reasons.push(`Weight OK: ${cargoWeightLbs.toLocaleString()}lbs within ${trailer.maxWeight.toLocaleString()}lbs limit`);
+      }
+    }
+
+    // Bonus for matching cargo description to trailer's bestFor
+    for (const bestFor of trailer.bestFor) {
+      if (description.includes(bestFor.toLowerCase())) {
+        fitScore += 10;
+        reasons.push(`Matches trailer specialty: ${bestFor}`);
+        break;
+      }
+    }
+
+    // Special considerations
+    if (trailer.category === 'enclosed' &&
+        (description.includes('weather') || description.includes('sensitive') ||
+         description.includes('protect') || description.includes('covered'))) {
+      fitScore += 10;
+      reasons.push('Enclosed trailer provides weather protection');
+    }
+
+    if (trailer.category === 'reefer' &&
+        (description.includes('refrigerat') || description.includes('frozen') ||
+         description.includes('cold') || description.includes('temperature'))) {
+      fitScore += 15;
+      reasons.push('Reefer required for temperature control');
+    }
+
+    if (!fits) {
+      fitScore = Math.max(0, fitScore - 50); // Penalize but still include for reference
+    }
+
+    suggestions.push({
+      trailer,
+      fitScore: Math.min(100, Math.max(0, fitScore)),
+      reasons,
+      warnings
+    });
+  }
+
+  // Sort by fit score descending, then by deck utilization efficiency
+  suggestions.sort((a, b) => {
+    if (b.fitScore !== a.fitScore) {
+      return b.fitScore - a.fitScore;
+    }
+    // If scores are equal, prefer smaller deck (better utilization)
+    const aArea = a.trailer.deckLength * a.trailer.deckWidth;
+    const bArea = b.trailer.deckLength * b.trailer.deckWidth;
+    return aArea - bArea;
+  });
+
+  return suggestions;
+}
+
+/**
+ * Get the best trailer recommendation for cargo
+ */
+function getBestTrailer(
+  height: number | string | null | undefined,
+  width: number | string | null | undefined,
+  length: number | string | null | undefined,
+  weight: number | string | null | undefined,
+  dimensionUnit?: string | null,
+  weightUnit?: string | null,
+  cargoDescription?: string | null
+): TrailerSuggestion | null {
+  const suggestions = suggestTrailer(height, width, length, weight, dimensionUnit, weightUnit, cargoDescription);
+  // Return best fitting trailer (score > 40 means it actually fits)
+  return suggestions.find(s => s.fitScore > 40) || suggestions[0] || null;
+}
+
+/**
+ * Check if cargo is OOG (Out of Gauge) based on description and dimensions
+ * Uses legal limits from trailer configurations
+ */
+function isOOGCargo(
+  description: string | null | undefined,
+  height: number | string | null | undefined,
+  width: number | string | null | undefined,
+  length?: number | string | null | undefined,
+  weight?: number | string | null | undefined,
+  dimensionUnit?: string | null,
+  weightUnit?: string | null
+): boolean {
+  const analysis = analyzeOOGCargo(description, height, width, length, weight, dimensionUnit, weightUnit);
+  return analysis.isOOG;
 }
 
 /**
@@ -1111,8 +1465,14 @@ function suggestPriceEnhanced(historicalQuote: Quote, similarityScore: number, s
   // Apply OOG/Container type pricing multiplier based on source quote characteristics
   const sourceContainerType = detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type);
   const histContainerType = detectContainerType(historicalQuote.cargo_description, historicalQuote.service_type);
-  const sourceIsOOG = isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width);
-  const histIsOOG = isOOGCargo(historicalQuote.cargo_description, historicalQuote.cargo_height, historicalQuote.cargo_width);
+  const sourceIsOOG = isOOGCargo(
+    sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width,
+    sourceQuote.cargo_length, sourceQuote.cargo_weight, sourceQuote.dimension_unit, sourceQuote.weight_unit
+  );
+  const histIsOOG = isOOGCargo(
+    historicalQuote.cargo_description, historicalQuote.cargo_height, historicalQuote.cargo_width,
+    historicalQuote.cargo_length, historicalQuote.cargo_weight, historicalQuote.dimension_unit, historicalQuote.weight_unit
+  );
 
   // Calculate multiplier adjustment if source is OOG but historical is not
   let pricingMultiplier = 1.0;
@@ -1684,7 +2044,7 @@ async function getAIPricingRecommendation(
 ): Promise<AIPricingDetails | null> {
   const { useAI = true } = options;
 
-  if (!useAI || matches.length === 0) {
+  if (!useAI) {
     return null;
   }
 
@@ -1870,7 +2230,7 @@ async function getAIPricingRecommendation(
       const aiResponseText = await aiService.generateResponse(pricingPrompt, {
         temperature: 0.2,
         topP: 0.9,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 8192,
         responseMimeType: 'application/json',
       });
 
@@ -1907,7 +2267,43 @@ ${truncated}`;
 
         const aiSuggestedPrice = parsedResult.amount;
         const aiFullResponse = parsedResult.fullResponse;
+        const aiConfidence = aiFullResponse?.confidence;
 
+        // PRIORITY: When AI has HIGH confidence, trust it directly without algorithmic constraints
+        // This handles cases where algorithmic matching fails (wrong comparables, project cargo, etc.)
+        if (aiSuggestedPrice && aiConfidence === 'HIGH') {
+          console.log(
+            `      -> AI HIGH confidence pricing: Using AI price $${aiSuggestedPrice.toLocaleString()} directly`
+          );
+          const comprehensiveReasoning = buildAIReasoning(aiFullResponse, algorithmicRecommendation?.reasoning);
+          const aiQuote = aiFullResponse?.recommended_quote;
+          const aiBreakdown = aiFullResponse?.price_breakdown;
+
+          const finalPrice = Math.round(aiSuggestedPrice);
+
+          return {
+            recommended_price: finalPrice,
+            floor_price: aiQuote?.floor_price ?? finalPrice * 0.8,
+            target_price: aiQuote?.target_price ?? finalPrice * 0.92,
+            ceiling_price: aiQuote?.stretch_price ?? finalPrice * 1.05,
+            confidence: 'HIGH' as const,
+            reasoning: comprehensiveReasoning || `AI HIGH confidence recommendation: $${finalPrice.toLocaleString()}`,
+            price_breakdown: aiBreakdown ? {
+              linehaul: aiBreakdown.linehaul,
+              fuel_surcharge: aiBreakdown.fuel_surcharge,
+              accessorials: aiBreakdown.accessorials,
+              port_fees: aiBreakdown.port_fees,
+              handling: aiBreakdown.handling,
+              margin: aiBreakdown.margin,
+            } : algorithmicRecommendation?.price_breakdown,
+            market_factors: aiFullResponse?.market_factors ?? algorithmicRecommendation?.market_factors,
+            negotiation_room_percent: aiBreakdown?.margin && finalPrice
+              ? Math.round((aiBreakdown.margin / finalPrice) * 100)
+              : algorithmicRecommendation?.negotiation_room_percent,
+          };
+        }
+
+        // Case 1: We have both AI and algorithmic recommendations - blend them (AI not HIGH confidence)
         if (aiSuggestedPrice && algorithmicRecommendation?.recommended_price) {
           const floor = algorithmicRecommendation.floor_price ?? null;
           const ceiling = algorithmicRecommendation.ceiling_price ?? null;
@@ -1921,20 +2317,19 @@ ${truncated}`;
           // Project cargo tends to be underrepresented in historical data; when confidence is LOW and cargo is
           // machinery/vehicles/oversized, we lean more on the AI.
           const sourceCargoCat = classifyCargo(sourceQuote.cargo_description);
-          const isProjectCargo = ['MACHINERY', 'VEHICLES', 'OVERSIZED'].includes(sourceCargoCat);
           const sourceMiles = routeDistance?.distanceMiles ?? null;
           const useHeavyAiForLowConfidenceProjectCargo =
             algorithmicRecommendation.confidence === 'LOW' &&
             (sourceCargoCat === 'MACHINERY' || sourceCargoCat === 'OVERSIZED') &&
             (typeof sourceMiles === 'number' ? sourceMiles >= 400 : false);
 
-          // For non-project cargo, avoid large AI-driven swings when the algorithmic model is already MEDIUM/HIGH.
-          // This keeps the AI as a small stabilizer rather than a source of new outliers.
+          // For non-HIGH confidence AI, apply ratio constraints
           if (algorithmicRecommendation.confidence !== 'LOW') {
-            const ratio = guardedAi / algorithmicRecommendation.recommended_price;
-            if (!Number.isFinite(ratio) || ratio < 0.85 || ratio > 1.15) {
+            const rawRatio = aiSuggestedPrice / algorithmicRecommendation.recommended_price;
+
+            if (!Number.isFinite(rawRatio) || rawRatio < 0.85 || rawRatio > 1.15) {
               console.log(
-                `      -> AI adjustment ignored (confidence=${algorithmicRecommendation.confidence}, ratio=${ratio.toFixed(2)} outside 0.85..1.15)`
+                `      -> AI adjustment ignored (AI confidence=${aiConfidence}, algo confidence=${algorithmicRecommendation.confidence}, ratio=${rawRatio.toFixed(2)} outside 0.85..1.15)`
               );
               return algorithmicRecommendation;
             }
@@ -1994,6 +2389,39 @@ ${truncated}`;
             negotiation_room_percent: aiBreakdown?.margin && blendedPrice
               ? Math.round((aiBreakdown.margin / blendedPrice) * 100)
               : algorithmicRecommendation.negotiation_room_percent,
+          };
+        }
+        // Case 2: We have AI response but NO algorithmic recommendation (no historical matches)
+        // Use AI pricing directly since it's our only data source
+        else if (aiSuggestedPrice && !algorithmicRecommendation?.recommended_price) {
+          console.log(`    AI-only pricing (no historical matches): $${aiSuggestedPrice.toLocaleString()}`);
+
+          const aiQuote = aiFullResponse?.recommended_quote;
+          const aiBreakdown = aiFullResponse?.price_breakdown;
+          const aiConfidence = (aiFullResponse?.confidence as 'HIGH' | 'MEDIUM' | 'LOW') || 'LOW';
+
+          // Build reasoning from AI response
+          const comprehensiveReasoning = buildAIReasoning(aiFullResponse, undefined);
+
+          return {
+            recommended_price: aiSuggestedPrice,
+            floor_price: aiQuote?.floor_price ?? Math.round(aiSuggestedPrice * 0.85),
+            target_price: aiQuote?.target_price ?? aiSuggestedPrice,
+            ceiling_price: aiQuote?.stretch_price ?? Math.round(aiSuggestedPrice * 1.15),
+            confidence: aiConfidence,
+            reasoning: `[AI-Only Pricing - No Historical Data] ${comprehensiveReasoning}`,
+            price_breakdown: aiBreakdown ? {
+              linehaul: aiBreakdown.linehaul,
+              fuel_surcharge: aiBreakdown.fuel_surcharge,
+              accessorials: aiBreakdown.accessorials,
+              port_fees: aiBreakdown.port_fees,
+              handling: aiBreakdown.handling,
+              margin: aiBreakdown.margin,
+            } : undefined,
+            market_factors: aiFullResponse?.market_factors,
+            negotiation_room_percent: aiBreakdown?.margin && aiSuggestedPrice
+              ? Math.round((aiBreakdown.margin / aiSuggestedPrice) * 100)
+              : 10, // Default 10% negotiation room for AI-only pricing
           };
         }
       }
@@ -2157,36 +2585,64 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
             aiPricing: aiPricing || undefined,
           });
         } else {
-          // NO MATCHES FOUND - Apply fallback pricing
-          console.log(`    No matches found (minScore: ${minScore}) - applying fallback pricing`);
+          // NO MATCHES FOUND - Try AI pricing first, then fallback
+          console.log(`    No matches found (minScore: ${minScore}) - attempting AI pricing without historical data`);
 
-          const fallbackPricing = calculateFallbackPricing(sourceQuote, sourceDistanceMiles);
-          finalSuggestedPrice = fallbackPricing.price;
-          finalPriceConfidence = fallbackPricing.confidence === 'LOW' ? 0.35 : 0.25;
-          finalPriceRange = fallbackPricing.priceRange;
-          pricingSource = 'fallback';
+          // Try AI pricing even without matches - AI can use market knowledge
+          if (useAI) {
+            aiPricing = await getAIPricingRecommendation(sourceQuote, [], { useAI }, routeDistance);
+            if (aiPricing && aiPricing.recommended_price) {
+              finalSuggestedPrice = aiPricing.recommended_price;
+              finalPriceConfidence = aiPricing.confidence === 'HIGH' ? 0.7 :
+                                     aiPricing.confidence === 'MEDIUM' ? 0.5 : 0.4;
+              finalPriceRange = { low: aiPricing.floor_price!, high: aiPricing.ceiling_price! };
+              pricingSource = 'ai_no_history';
+              console.log(`    AI Price (no history): $${aiPricing.recommended_price.toLocaleString()} (${aiPricing.confidence})`);
 
-          console.log(`    Fallback Price: $${fallbackPricing.price.toLocaleString()} (${fallbackPricing.confidence})`);
-          console.log(`    Breakdown: ${fallbackPricing.reasoning}`);
+              // Save AI pricing recommendation to dedicated table
+              await db.saveAIPricingRecommendation(quoteId, sourceQuote.email_id, aiPricing);
 
-          // Create a synthetic match detail for the fallback pricing
-          // Map VERY_LOW to LOW for AIPricingDetails type compatibility
-          const mappedConfidence: 'HIGH' | 'MEDIUM' | 'LOW' = fallbackPricing.confidence === 'VERY_LOW' ? 'LOW' : 'LOW';
-          results.matchDetails.push({
-            quoteId,
-            matchCount: 0,
-            bestScore: 0,
-            suggestedPrice: finalSuggestedPrice,
-            priceRange: finalPriceRange,
-            aiPricing: {
-              recommended_price: fallbackPricing.price,
-              floor_price: fallbackPricing.priceRange.low,
-              target_price: fallbackPricing.price,
-              ceiling_price: fallbackPricing.priceRange.high,
-              confidence: mappedConfidence,
-              reasoning: `[FALLBACK] ${fallbackPricing.reasoning}`,
-            },
-          });
+              results.matchDetails.push({
+                quoteId,
+                matchCount: 0,
+                bestScore: 0,
+                suggestedPrice: finalSuggestedPrice,
+                priceRange: finalPriceRange,
+                aiPricing: aiPricing,
+              });
+            }
+          }
+
+          // If AI pricing failed or not enabled, use fallback
+          if (!aiPricing || !aiPricing.recommended_price) {
+            const fallbackPricing = calculateFallbackPricing(sourceQuote, sourceDistanceMiles);
+            finalSuggestedPrice = fallbackPricing.price;
+            finalPriceConfidence = fallbackPricing.confidence === 'LOW' ? 0.35 : 0.25;
+            finalPriceRange = fallbackPricing.priceRange;
+            pricingSource = 'fallback';
+
+            console.log(`    Fallback Price: $${fallbackPricing.price.toLocaleString()} (${fallbackPricing.confidence})`);
+            console.log(`    Breakdown: ${fallbackPricing.reasoning}`);
+
+            // Create a synthetic match detail for the fallback pricing
+            // Map VERY_LOW to LOW for AIPricingDetails type compatibility
+            const mappedConfidence: 'HIGH' | 'MEDIUM' | 'LOW' = fallbackPricing.confidence === 'VERY_LOW' ? 'LOW' : 'LOW';
+            results.matchDetails.push({
+              quoteId,
+              matchCount: 0,
+              bestScore: 0,
+              suggestedPrice: finalSuggestedPrice,
+              priceRange: finalPriceRange,
+              aiPricing: {
+                recommended_price: fallbackPricing.price,
+                floor_price: fallbackPricing.priceRange.low,
+                target_price: fallbackPricing.price,
+                ceiling_price: fallbackPricing.priceRange.high,
+                confidence: mappedConfidence,
+                reasoning: `[FALLBACK] ${fallbackPricing.reasoning}`,
+              },
+            });
+          }
         }
 
         results.processed++;
@@ -2654,8 +3110,16 @@ STABILITY / ANTI-ANCHORING:
 - **Route Distance**: ${sourceQuote.total_distance_miles} miles (from database)`
     : '';
 
-  // Build quote details section
-  const isOOG = isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width);
+  // Build quote details section with full OOG analysis and trailer suggestion
+  const oogAnalysis = analyzeOOGCargo(
+    sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width,
+    sourceQuote.cargo_length, sourceQuote.cargo_weight, sourceQuote.dimension_unit, sourceQuote.weight_unit
+  );
+  const isOOG = oogAnalysis.isOOG;
+  const trailerSuggestion = getBestTrailer(
+    sourceQuote.cargo_height, sourceQuote.cargo_width, sourceQuote.cargo_length,
+    sourceQuote.cargo_weight, sourceQuote.dimension_unit, sourceQuote.weight_unit, sourceQuote.cargo_description
+  );
   const sourceCargoCategory = classifyCargo(sourceQuote.cargo_description);
   const sourceMiles = routeDistance?.distanceMiles ?? (typeof sourceQuote.total_distance_miles === 'number' ? sourceQuote.total_distance_miles : null);
 
@@ -2733,7 +3197,10 @@ CONSTRAINTS:
 - **Trailer Length Required**: ${sourceQuote.trailer_length_required || 'Not specified'}
 - **Load Type**: ${sourceQuote.load_type || 'Not specified'}
 - **Container Type**: ${detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type) || 'Standard/Not specified'}
-- **OOG (Out of Gauge)**: ${isOOG ? 'YES - Apply 1.35-1.45x pricing multiplier' : 'No'}
+- **OOG (Out of Gauge)**: ${isOOG ? 'YES - Apply 1.35-1.45x pricing multiplier' : 'No'}${oogAnalysis.reasons.length > 0 ? ` (${oogAnalysis.reasons.join('; ')})` : ''}
+- **Requires Permits**: ${oogAnalysis.requiresPermits ? 'YES - Oversize permits required' : 'No/Not determined'}
+- **Requires Pilot Car**: ${oogAnalysis.requiresPilotCar ? 'YES - Width exceeds 12ft' : 'No/Not determined'}
+- **Suggested Trailer**: ${trailerSuggestion ? `${trailerSuggestion.trailer.name} (fit score: ${trailerSuggestion.fitScore}/100)` : 'Unable to determine'}${trailerSuggestion?.reasons.length ? ` - ${trailerSuggestion.reasons.slice(0, 2).join(', ')}` : ''}${trailerSuggestion?.warnings.length ? ` ⚠️ ${trailerSuggestion.warnings.join(', ')}` : ''}
 ${isOOG ? `
 **IMPORTANT OOG PRICING NOTE**: This cargo is Out of Gauge (OOG). Based on learned feedback:
 - Open Top containers command +35-45% premium over standard containers
@@ -2762,7 +3229,21 @@ ${historicalPriceStatsBlock}
 ${baselineInfo}
 
 ## YOUR TASK
-Use the historical matches plus the baseline to produce a competitive but realistic total quote.
+${topMatches.length > 0
+  ? 'Use the historical matches plus the baseline to produce a competitive but realistic total quote.'
+  : `**NO HISTORICAL MATCHES AVAILABLE** - You must price this quote using your knowledge of freight market rates.
+
+MARKET-BASED PRICING GUIDANCE:
+- For Ground/FTL freight: $2.00-$4.50 per mile depending on equipment, cargo type, and market conditions
+- For Drayage (port moves): $400-$1200 base + $3-5/mile for distances over 50 miles
+- For LTL: Consider weight, class, and distance-based tariffs
+- For specialized equipment (flatbed, step-deck, RGN): Add 15-40% premium over dry van rates
+- For hazmat: Add $300-600 base + 15-25% premium
+- For temperature-controlled: Add 20-35% premium over dry van
+- For OOG/oversized: Add 35-50% premium + permit costs ($50-300/state)
+
+Consider the route distance, cargo characteristics, service type, and any special requirements when pricing.
+Since there is no historical data, set confidence to "LOW" and provide wider floor-to-ceiling spreads.`}
 `;
 
   return `${basePrompt}
@@ -2895,6 +3376,15 @@ export {
   detectContainerType,
   detectEquipmentType,
   isOOGCargo,
+  analyzeOOGCargo,
+  suggestTrailer,
+  getBestTrailer,
+  convertToFeet,
+  convertToLbs,
+
+  // Trailer configuration
+  TRAILER_CONFIGS,
+  LEGAL_LIMITS,
 
   // Pricing functions
   calculateFallbackPricing,
