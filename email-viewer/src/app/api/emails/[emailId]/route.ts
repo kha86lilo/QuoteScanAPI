@@ -26,10 +26,17 @@ export async function GET(
 
     const email = emailResult.rows[0];
 
-    // Get quotes for this email with their matches
+    // Get quotes for this email with their matches and AI pricing recommendations
     const quotesResult = await client.query(
       `SELECT
         q.*,
+        -- AI Pricing Recommendations
+        apr.ai_recommended_price,
+        apr.ai_reasoning,
+        apr.confidence as ai_confidence,
+        apr.floor_price,
+        apr.ceiling_price,
+        apr.target_price,
         (
           SELECT json_agg(
             json_build_object(
@@ -76,6 +83,7 @@ export async function GET(
           WHERE m.source_quote_id = q.quote_id AND m.suggested_price IS NOT NULL
         ) as avg_suggested_price
       FROM shipping_quotes q
+      INNER JOIN ai_pricing_recommendations apr ON apr.quote_id = q.quote_id
       WHERE q.email_id = $1
       ORDER BY q.created_at`,
       [emailId]

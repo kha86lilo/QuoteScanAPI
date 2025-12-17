@@ -85,7 +85,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
   };
 
   const exportProforma = (quote: QuoteWithMatches) => {
-    const suggestedPrice = quote.top_suggested_price || quote.matches?.[0]?.suggested_price;
+    const suggestedPrice = quote.ai_recommended_price;
     const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
     const doc = new jsPDF();
@@ -343,7 +343,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
               </thead>
               <tbody className="divide-y divide-outlook-border">
                 {email.quotes.map((quote) => {
-                  const suggestedPrice = quote.top_suggested_price || quote.matches?.[0]?.suggested_price;
+                  const suggestedPrice = quote.ai_recommended_price;
                   const topMatch = quote.matches?.[0];
                   return (
                     <tr key={quote.quote_id} className="hover:bg-gray-50">

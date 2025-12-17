@@ -450,6 +450,20 @@ export interface PriceBreakdown {
   handling?: number;
 }
 
+export interface AIPricingRecommendation {
+  id?: number;
+  quote_id: number;
+  email_id?: number | null;
+  ai_recommended_price?: number | null;
+  ai_reasoning?: string | null;
+  confidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  floor_price?: number | null;
+  ceiling_price?: number | null;
+  target_price?: number | null;
+  created_at?: Date;
+  updated_at?: Date;
+}
+
 export interface MatchResult {
   processed: number;
   matchesCreated: number;

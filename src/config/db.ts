@@ -24,6 +24,7 @@ import type {
   Spammer,
   MatchCriteria,
   AIPricingDetails,
+  AIPricingRecommendation,
   StaffReply,
   StaffQuoteReply,
   PricingReplyResult,
@@ -1860,6 +1861,74 @@ async function getStaffQuoteRepliesByOriginalEmailId(
   }
 }
 
+// =====================================================
+// AI Pricing Recommendations Functions
+// =====================================================
+
+/**
+ * Save AI pricing recommendation to dedicated table
+ * Uses upsert to handle re-processing of quotes
+ */
+async function saveAIPricingRecommendation(
+  quoteId: number,
+  emailId: number | null | undefined,
+  aiPricing: AIPricingDetails
+): Promise<AIPricingRecommendation | null> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query<AIPricingRecommendation>(
+      `INSERT INTO ai_pricing_recommendations (
+        quote_id, email_id, ai_recommended_price, ai_reasoning, confidence,
+        floor_price, ceiling_price, target_price, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+      ON CONFLICT (quote_id)
+      DO UPDATE SET
+        email_id = COALESCE($2, ai_pricing_recommendations.email_id),
+        ai_recommended_price = $3,
+        ai_reasoning = $4,
+        confidence = $5,
+        floor_price = $6,
+        ceiling_price = $7,
+        target_price = $8,
+        updated_at = NOW()
+      RETURNING *`,
+      [
+        quoteId,
+        emailId ?? null,
+        aiPricing.recommended_price ?? null,
+        aiPricing.reasoning ?? null,
+        aiPricing.confidence ?? null,
+        aiPricing.floor_price ?? null,
+        aiPricing.ceiling_price ?? null,
+        aiPricing.target_price ?? null,
+      ]
+    );
+
+    return result.rows[0] ?? null;
+  } catch (error) {
+    console.error('Error saving AI pricing recommendation:', (error as Error).message);
+    return null;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get AI pricing recommendation for a quote
+ */
+async function getAIPricingRecommendation(quoteId: number): Promise<AIPricingRecommendation | null> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query<AIPricingRecommendation>(
+      'SELECT * FROM ai_pricing_recommendations WHERE quote_id = $1',
+      [quoteId]
+    );
+    return result.rows[0] ?? null;
+  } finally {
+    client.release();
+  }
+}
+
 export {
   pool,
   checkEmailExists,
@@ -1896,6 +1965,9 @@ export {
   getQuoteForMatching,
   getQuoteIdsByStartDate,
   getFeedbackForHistoricalQuotes,
+  // AI Pricing Recommendations
+  saveAIPricingRecommendation,
+  getAIPricingRecommendation,
   // Spammers
   isSpammer,
   getAllSpammers,

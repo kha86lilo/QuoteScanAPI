@@ -85,6 +85,13 @@ export interface QuoteWithMatches extends ShippingQuote {
   matches: QuoteMatch[];
   top_suggested_price: number | null;
   avg_suggested_price: number | null;
+  // AI Pricing Recommendations
+  ai_recommended_price: number | null;
+  ai_reasoning: string | null;
+  ai_confidence: string | null;
+  floor_price: number | null;
+  ceiling_price: number | null;
+  target_price: number | null;
 }
 
 export interface PaginatedEmailsResponse {

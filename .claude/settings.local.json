@@ -14,7 +14,9 @@
       "Bash(dir:*)",
       "Bash(npx tsc:*)",
       "Bash(tasklist:*)",
-      "Bash(powershell \"Get-Item ''d:\\chipa\\src\\services\\enhancedQuoteMatchingService.ts'' | Select-Object LastWriteTime\")"
+      "Bash(powershell \"Get-Item ''d:\\chipa\\src\\services\\enhancedQuoteMatchingService.ts'' | Select-Object LastWriteTime\")",
+      "Bash(npx ts-node:*)",
+      "Bash(npx tsx:*)"
     ],
     "deny": [],
     "ask": []

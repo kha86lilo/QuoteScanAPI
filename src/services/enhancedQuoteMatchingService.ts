@@ -503,11 +503,17 @@ function calculateEnhancedSimilarity(
 
   const sourceIsShortHaul = (sourceDistance ?? 0) > 0 && (sourceDistance as number) < 150;
 
-  // For international lanes, OCEAN and INTERMODAL are often functionally interchangeable in historical labeling.
-  // Keep this strict for domestic lanes to avoid mixing different pricing models.
+  // Determine if lanes are international (crossing country borders)
   const isSourceIntl = (sourceOriginRegion && sourceOriginRegion !== 'USA') || (sourceDestRegion && sourceDestRegion !== 'USA');
   const isHistIntl = (histOriginRegion && histOriginRegion !== 'USA') || (histDestRegion && histDestRegion !== 'USA');
-  const intlOceanIntermodalCompatible = isSourceIntl && isHistIntl && (
+
+  // CRITICAL: International vs domestic lane mismatch - these have completely different pricing models
+  // An international ocean quote (Rotterdam->NYC) should NOT match with domestic intermodal (Chicago->LA)
+  const laneTypeMismatch = isSourceIntl !== isHistIntl;
+
+  // For international lanes, OCEAN and INTERMODAL are often functionally interchangeable in historical labeling.
+  // But ONLY when both quotes are on the same lane type (both international OR both domestic).
+  const intlOceanIntermodalCompatible = isSourceIntl && isHistIntl && !laneTypeMismatch && (
     (sourceService === 'OCEAN' && histService === 'INTERMODAL') ||
     (sourceService === 'INTERMODAL' && histService === 'OCEAN')
   );
@@ -517,7 +523,14 @@ function calculateEnhancedSimilarity(
     ? ['DRAYAGE']
     : (SERVICE_COMPATIBILITY[sourceService] || []);
 
-  criteria.service_compatibility = (compatible.includes(histService) || intlOceanIntermodalCompatible) ? 0.8 : 0;
+  // Apply heavy penalty for lane type mismatch on ocean/intermodal services
+  let serviceCompatScore = (compatible.includes(histService) || intlOceanIntermodalCompatible) ? 0.8 : 0;
+  if (laneTypeMismatch && (sourceService === 'OCEAN' || sourceService === 'INTERMODAL')) {
+    // International ocean/intermodal should NOT match domestic - zero out compatibility
+    serviceCompatScore = 0;
+  }
+
+  criteria.service_compatibility = serviceCompatScore;
 
   const serviceScore = Math.max(criteria.service_type || 0, criteria.service_compatibility || 0);
   totalScore += serviceScore * (ENHANCED_WEIGHTS.service_type! + ENHANCED_WEIGHTS.service_compatibility!);
@@ -627,6 +640,14 @@ function calculateEnhancedSimilarity(
         // @ts-ignore
         criteria.long_haul_penalty_cargo = 0.15;
     }
+  }
+
+  // CRITICAL: Penalize international vs domestic lane mismatches heavily
+  // These have completely different pricing models and should rarely match
+  if (laneTypeMismatch) {
+    finalScore *= 0.5; // 50% penalty for lane type mismatch
+    // @ts-ignore
+    criteria.lane_type_mismatch_penalty = 0.5;
   }
 
   return {
@@ -1106,6 +1127,9 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
               finalPriceConfidence = aiPricing.confidence === 'HIGH' ? 0.9 :
                                      aiPricing.confidence === 'MEDIUM' ? 0.7 : 0.5;
               console.log(`    AI Price: $${aiPricing.recommended_price.toLocaleString()} (${aiPricing.confidence})`);
+
+              // Save AI pricing recommendation to dedicated table
+              await db.saveAIPricingRecommendation(quoteId, sourceQuote.email_id, aiPricing);
             }
           }
 

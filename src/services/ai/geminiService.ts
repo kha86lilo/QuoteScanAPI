@@ -6,8 +6,47 @@
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import BaseAIService, { type GenerationOptions } from './BaseAIService.js';
 import type { Email, ParsedEmailData } from '../../types/index.js';
+import fs from 'fs';
+import path from 'path';
 import dotenv from 'dotenv';
 dotenv.config();
+
+// AI Request Logger
+const LOGS_DIR = path.join(process.cwd(), 'logs', 'ai_requests');
+
+function getLogFilePath(): string {
+  const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  return path.join(LOGS_DIR, `ai_requests_${date}.log`);
+}
+
+function ensureLogDir(): void {
+  if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+  }
+}
+
+interface AILogEntry {
+  timestamp: string;
+  model: string;
+  task: 'extraction' | 'pricing' | 'validation';
+  promptLength: number;
+  responseLength: number;
+  durationMs: number;
+  success: boolean;
+  error?: string;
+  promptPreview?: string;
+  responsePreview?: string;
+}
+
+function logAIRequest(entry: AILogEntry): void {
+  try {
+    ensureLogDir();
+    const logLine = JSON.stringify(entry) + '\n';
+    fs.appendFileSync(getLogFilePath(), logLine);
+  } catch (err) {
+    console.error('Failed to log AI request:', (err as Error).message);
+  }
+}
 
 interface GeminiModel {
   name?: string;
@@ -36,16 +75,25 @@ interface ModelsCache {
 
 class GeminiService extends BaseAIService {
   private client: GoogleGenerativeAI;
-  private modelName: string;
-  private model: GenerativeModel;
+  private extractionModelName: string;
+  private pricingModelName: string;
+  private extractionModel: GenerativeModel;
+  private pricingModel: GenerativeModel;
   private _modelsCache?: ModelsCache;
 
   constructor() {
     super('Gemini');
     const apiKey = process.env.GEMINI_API_KEY || '';
     this.client = new GoogleGenerativeAI(apiKey);
-    this.modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-    this.model = this.client.getGenerativeModel({ model: this.modelName });
+
+    // Separate models for extraction and pricing tasks
+    this.extractionModelName = process.env.GEMINI_MODEL_EXTRACTION || 'gemini-2.5-flash';
+    this.pricingModelName = process.env.GEMINI_MODEL_PRICING || 'gemini-2.5-flash';
+
+    this.extractionModel = this.client.getGenerativeModel({ model: this.extractionModelName });
+    this.pricingModel = this.client.getGenerativeModel({ model: this.pricingModelName });
+
+    console.log(`  Gemini models: extraction=${this.extractionModelName}, pricing=${this.pricingModelName}`);
   }
 
   /**
@@ -56,18 +104,42 @@ class GeminiService extends BaseAIService {
     const prompt = this.getExtractionPrompt(emailContent);
 
     return await this.withRetry(async () => {
-      const result = await this.model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      });
+      const startTime = Date.now();
+      let responseText = '';
+      let success = false;
+      let errorMsg: string | undefined;
 
-      const responseText = (await result.response.text()).trim();
-      const parsedData = this.cleanAndParseResponse(responseText);
-      const confidence = this.calculateConfidence(parsedData);
+      try {
+        const result = await this.extractionModel.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        });
 
-      parsedData.ai_confidence_score = confidence;
+        responseText = (await result.response.text()).trim();
+        const parsedData = this.cleanAndParseResponse(responseText);
+        const confidence = this.calculateConfidence(parsedData);
 
-      console.log(`  Success: Parsed email with ${this.serviceName} (confidence: ${confidence})`);
-      return parsedData;
+        parsedData.ai_confidence_score = confidence;
+        success = true;
+
+        console.log(`  Success: Parsed email with ${this.serviceName} (confidence: ${confidence})`);
+        return parsedData;
+      } catch (err) {
+        errorMsg = (err as Error).message;
+        throw err;
+      } finally {
+        logAIRequest({
+          timestamp: new Date().toISOString(),
+          model: this.extractionModelName,
+          task: 'extraction',
+          promptLength: prompt.length,
+          responseLength: responseText.length,
+          durationMs: Date.now() - startTime,
+          success,
+          error: errorMsg,
+          promptPreview: prompt.slice(0, 200),
+          responsePreview: responseText.slice(0, 500),
+        });
+      }
     }, maxRetries);
   }
 
@@ -82,39 +154,70 @@ class GeminiService extends BaseAIService {
    * Generate a response from a prompt
    */
   async generateResponse(prompt: string, options: GenerationOptions = {}): Promise<string> {
-    const generationConfig: Record<string, unknown> = {
-      temperature: options.temperature ?? 0.2,
-      topP: options.topP ?? 0.9,
-      ...(typeof options.topK === 'number' ? { topK: options.topK } : {}),
-      ...(typeof options.maxOutputTokens === 'number' ? { maxOutputTokens: options.maxOutputTokens } : {}),
-      ...(typeof options.responseMimeType === 'string' ? { responseMimeType: options.responseMimeType } : {}),
-    };
+    const startTime = Date.now();
+    let responseText = '';
+    let success = false;
+    let errorMsg: string | undefined;
 
-    const result = await this.model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig,
-    } as any);
+    try {
+      const generationConfig: Record<string, unknown> = {
+        temperature: options.temperature ?? 0.2,
+        topP: options.topP ?? 0.9,
+        ...(typeof options.topK === 'number' ? { topK: options.topK } : {}),
+        ...(typeof options.maxOutputTokens === 'number' ? { maxOutputTokens: options.maxOutputTokens } : {}),
+        ...(typeof options.responseMimeType === 'string' ? { responseMimeType: options.responseMimeType } : {}),
+      };
 
-    const primaryText = (await result.response.text()).trim();
-    if (primaryText) return primaryText;
+      const result = await this.pricingModel.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig,
+      } as any);
 
-    // Some SDK responses (notably JSON mime types) may not populate response.text().
-    const parts = (result.response as any)?.candidates?.[0]?.content?.parts;
-    const fallbackText = Array.isArray(parts)
-      ? parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('').trim()
-      : '';
+      const primaryText = (await result.response.text()).trim();
+      if (primaryText) {
+        responseText = primaryText;
+        success = true;
+        return primaryText;
+      }
 
-    if (fallbackText) return fallbackText;
+      // Some SDK responses (notably JSON mime types) may not populate response.text().
+      const parts = (result.response as any)?.candidates?.[0]?.content?.parts;
+      const fallbackText = Array.isArray(parts)
+        ? parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('').trim()
+        : '';
 
-    const candidates = (result.response as any)?.candidates;
-    const candidateCount = Array.isArray(candidates) ? candidates.length : 0;
-    const finishReason = candidates?.[0]?.finishReason || candidates?.[0]?.finish_reason || null;
-    const promptFeedback = (result.response as any)?.promptFeedback || (result.response as any)?.prompt_feedback || null;
-    const blockReason = promptFeedback?.blockReason || promptFeedback?.block_reason || null;
+      if (fallbackText) {
+        responseText = fallbackText;
+        success = true;
+        return fallbackText;
+      }
 
-    throw new Error(
-      `Gemini returned empty response (candidates=${candidateCount}, finishReason=${finishReason ?? 'n/a'}, blockReason=${blockReason ?? 'n/a'})`
-    );
+      const candidates = (result.response as any)?.candidates;
+      const candidateCount = Array.isArray(candidates) ? candidates.length : 0;
+      const finishReason = candidates?.[0]?.finishReason || candidates?.[0]?.finish_reason || null;
+      const promptFeedback = (result.response as any)?.promptFeedback || (result.response as any)?.prompt_feedback || null;
+      const blockReason = promptFeedback?.blockReason || promptFeedback?.block_reason || null;
+
+      throw new Error(
+        `Gemini returned empty response (candidates=${candidateCount}, finishReason=${finishReason ?? 'n/a'}, blockReason=${blockReason ?? 'n/a'})`
+      );
+    } catch (err) {
+      errorMsg = (err as Error).message;
+      throw err;
+    } finally {
+      logAIRequest({
+        timestamp: new Date().toISOString(),
+        model: this.pricingModelName,
+        task: 'pricing',
+        promptLength: prompt.length,
+        responseLength: responseText.length,
+        durationMs: Date.now() - startTime,
+        success,
+        error: errorMsg,
+        promptPreview: prompt.slice(0, 200),
+        responsePreview: responseText.slice(0, 500),
+      });
+    }
   }
 
   /**
@@ -122,7 +225,7 @@ class GeminiService extends BaseAIService {
    */
   async validateApiKey(): Promise<boolean> {
     try {
-      await this.model.generateContent({
+      await this.extractionModel.generateContent({
         contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
       });
       return true;
