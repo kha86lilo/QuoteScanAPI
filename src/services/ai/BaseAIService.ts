@@ -19,6 +19,14 @@ interface MarketData {
   fuelSurcharge?: number;
 }
 
+export interface GenerationOptions {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  maxOutputTokens?: number;
+  responseMimeType?: string;
+}
+
 export default abstract class BaseAIService {
   serviceName: string;
 
@@ -39,7 +47,7 @@ export default abstract class BaseAIService {
   /**
    * Abstract method - must be implemented by child classes
    */
-  abstract generateResponse(prompt: string): Promise<string>;
+  abstract generateResponse(prompt: string, options?: GenerationOptions): Promise<string>;
 
   /**
    * Prepare email content for AI parsing

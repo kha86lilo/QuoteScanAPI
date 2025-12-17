@@ -108,7 +108,7 @@ const INTL_REGIONS: Record<string, string[]> = {
 
 // Cargo Categories
 const CARGO_CATEGORIES: Record<string, string[]> = {
-  'MACHINERY': ['machine', 'equipment', 'excavator', 'loader', 'dozer', 'crane', 'forklift', 'tractor', 'generator', 'compressor', 'jlg', 'caterpillar', 'cat', 'komatsu', 'jcb', 'bobcat', 'hitachi', 'volvo', 'deere'],
+  'MACHINERY': ['machine', 'equipment', 'excavator', 'loader', 'dozer', 'crane', 'forklift', 'tractor', 'generator', 'compressor', 'jlg', 'caterpillar', 'cat', 'komatsu', 'jcb', 'bobcat', 'hitachi', 'volvo', 'deere', 'heat exchanger'],
   'VEHICLES': ['vehicle', 'car', 'truck', 'bus', 'trailer', 'automobile', 'auto', 'suv', 'van'],
   'CONTAINERS': ['container', '20ft', '40ft', "20'", "40'", 'high cube', 'hc', 'soc', 'coc', 'flat rack', 'open top'],
   'INDUSTRIAL': ['steel', 'metal', 'pipe', 'coil', 'beam', 'plate', 'iron', 'aluminum'],
@@ -223,8 +223,47 @@ function classifyCargo(description: string | null | undefined): string {
 
   const lower = description.toLowerCase();
 
+  const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const containsKeyword = (haystack: string, keyword: string): boolean => {
+    const k = keyword.toLowerCase().trim();
+    if (!k) return false;
+
+    // If keyword includes punctuation that breaks \b semantics (e.g., 40', 20ft), fall back to substring.
+    if (/[^a-z0-9\s-]/i.test(k)) {
+      return haystack.includes(k);
+    }
+
+    const parts = k.split(/\s+/).filter(Boolean);
+
+    // Allow pluralization on the last word (e.g., "heat exchanger" -> "heat exchangers").
+    // Keep this conservative to avoid reintroducing substring false positives.
+    const withOptionalPlural = (word: string): string => {
+      const safe = escapeRegExp(word);
+      if (word.length <= 4) return safe;
+      if (word.endsWith('s')) return safe;
+      if (!/^[a-z0-9-]+$/i.test(word)) return safe;
+      return `${safe}s?`;
+    };
+
+    // Build a word-boundary-aware regex; allow flexible whitespace or hyphen separators for phrases.
+    // Examples matched:
+    // - "heat exchanger" / "heat exchangers" / "heat-exchanger" / "heat-exchangers"
+    if (parts.length > 1) {
+      const last = parts[parts.length - 1] || '';
+      const partPatterns = parts.map((p, idx) => (idx === parts.length - 1 ? withOptionalPlural(p) : escapeRegExp(p)));
+      const phrasePattern = partPatterns.join('(?:[\\s-]+)');
+      const pattern = `\\b${phrasePattern}\\b`;
+      return new RegExp(pattern, 'i').test(haystack);
+    }
+
+    const single = parts[0] || '';
+    const pattern = `\\b${withOptionalPlural(single)}\\b`;
+    return new RegExp(pattern, 'i').test(haystack);
+  };
+
   for (const [category, keywords] of Object.entries(CARGO_CATEGORIES)) {
-    if (keywords.some(k => lower.includes(k))) {
+    if (keywords.some(k => containsKeyword(lower, k))) {
       return category;
     }
   }
@@ -573,7 +612,22 @@ function calculateEnhancedSimilarity(
   totalScore += (criteria.distance_similarity || 0) * ENHANCED_WEIGHTS.distance_similarity!;
   totalWeight += ENHANCED_WEIGHTS.distance_similarity!;
 
-  const finalScore = totalWeight > 0 ? totalScore / totalWeight : 0;
+  let finalScore = totalWeight > 0 ? totalScore / totalWeight : 0;
+
+  // Penalize long-haul ground freight matches that have poor distance or cargo similarity
+  const isLongHaulGround = sourceService === 'GROUND' && (sourceDistance ?? 0) > 500;
+  if (isLongHaulGround) {
+    if (criteria.distance_similarity < 0.85) {
+        finalScore *= 0.8; // 20% penalty for poor distance match
+        // @ts-ignore
+        criteria.long_haul_penalty_distance = 0.2;
+    }
+    if (criteria.cargo_category < 1.0) {
+        finalScore *= 0.85; // 15% penalty for non-exact cargo match
+        // @ts-ignore
+        criteria.long_haul_penalty_cargo = 0.15;
+    }
+  }
 
   return {
     score: Math.round(finalScore * 10000) / 10000,
@@ -823,64 +877,146 @@ async function getAIPricingRecommendation(
     // Generate the AI pricing prompt using centralized getPromptForTask
     const pricingPrompt = generatePricingPrompt(sourceQuote, matches, routeDistance, algorithmicRecommendation);
 
+    const extractJsonObject = (text: string): string | null => {
+      const start = text.indexOf('{');
+      if (start < 0) return null;
+      let depth = 0;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '{') depth++;
+        if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            return text.slice(start, i + 1);
+          }
+        }
+      }
+      return null;
+    };
+
+    const parseAiInitialAmount = (text: string): { amount: number | null; error?: string } => {
+      const jsonCandidate = extractJsonObject(text);
+      if (!jsonCandidate) {
+        const trimmed = (text || '').trim();
+        const head = trimmed.slice(0, 220).replace(/\s+/g, ' ');
+        const tail = trimmed.length > 220 ? trimmed.slice(-220).replace(/\s+/g, ' ') : '';
+        const snippet = tail ? `${head} … ${tail}` : head;
+        return {
+          amount: null,
+          error: `No JSON object found in AI response (snippet: "${snippet}")`,
+        };
+      }
+      try {
+        const parsed = JSON.parse(jsonCandidate) as any;
+        const aiInitial = parsed?.recommended_quote?.initial_amount;
+        const raw = typeof aiInitial === 'number'
+          ? aiInitial
+          : Number(String(aiInitial ?? '').replace(/[$,\s]/g, ''));
+        const amount = Number.isFinite(raw) ? Math.round(raw) : NaN;
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return { amount: null, error: 'Invalid recommended_quote.initial_amount' };
+        }
+        return { amount };
+      } catch (e) {
+        return { amount: null, error: (e as Error).message };
+      }
+    };
+
     // Try to get AI-enhanced recommendation
     try {
-      const aiResponse = await aiService.generateResponse(pricingPrompt);
+      const aiResponse = await aiService.generateResponse(pricingPrompt, {
+        temperature: 0.2,
+        topP: 0.9,
+        maxOutputTokens: 4096,
+        responseMimeType: 'application/json',
+      });
 
       // Parse the AI response - it may return structured recommendations
-      if (aiResponse) {
-        const extractJsonObject = (text: string): string | null => {
-          const start = text.indexOf('{');
-          if (start < 0) return null;
-          let depth = 0;
-          for (let i = start; i < text.length; i++) {
-            const ch = text[i];
-            if (ch === '{') depth++;
-            if (ch === '}') {
-              depth--;
-              if (depth === 0) {
-                return text.slice(start, i + 1);
-              }
-            }
-          }
-          return null;
-        };
+      if (!aiResponse || !aiResponse.trim()) {
+        console.log('      -> AI returned an empty response; falling back to algorithmic pricing');
+      } else {
+        let parsedAmount = parseAiInitialAmount(aiResponse);
 
-        const jsonCandidate = extractJsonObject(aiResponse);
-        if (jsonCandidate) {
+        // If parsing fails, do one repair attempt asking for JSON only.
+        if (!parsedAmount.amount) {
+          console.log(`      -> AI response parsing failed: ${parsedAmount.error || 'unknown error'}`);
+          const truncated = aiResponse.length > 3000 ? aiResponse.slice(-3000) : aiResponse;
+          const repairPrompt = `${pricingPrompt}
+
+IMPORTANT: Your previous response was not valid JSON or did not include recommended_quote.initial_amount.
+Return ONLY a valid JSON object matching the OUTPUT FORMAT. No markdown, no prose.
+
+Previous response (for repair):
+${truncated}`;
+
           try {
-            const parsed = JSON.parse(jsonCandidate) as any;
-            const aiInitial = parsed?.recommended_quote?.initial_amount;
-            const aiSuggestedPriceRaw = typeof aiInitial === 'number' ? aiInitial : Number(String(aiInitial ?? '').replace(/[$,\s]/g, ''));
-            const aiSuggestedPrice = Number.isFinite(aiSuggestedPriceRaw) ? Math.round(aiSuggestedPriceRaw) : NaN;
-
-            if (Number.isFinite(aiSuggestedPrice) && aiSuggestedPrice > 0 && algorithmicRecommendation?.recommended_price) {
-              const floor = algorithmicRecommendation.floor_price ?? null;
-              const ceiling = algorithmicRecommendation.ceiling_price ?? null;
-
-              // Guardrails: the AI must stay close to the algorithmic band; otherwise we clamp.
-              const guardedAi = (floor && ceiling)
-                ? Math.round(Math.min(ceiling, Math.max(floor, aiSuggestedPrice)))
-                : aiSuggestedPrice;
-
-              // Use weighted blend: 85% algorithmic (more reliable), 15% AI suggestion
-              const blendedPrice = Math.round(
-                (algorithmicRecommendation.recommended_price * 0.85) + (guardedAi * 0.15)
-              );
-
-              console.log(
-                `    AI-enhanced pricing: Algorithmic $${algorithmicRecommendation.recommended_price.toLocaleString()}, AI suggested $${aiSuggestedPrice.toLocaleString()}, Guarded $${guardedAi.toLocaleString()}, Blended $${blendedPrice.toLocaleString()}`
-              );
-
-              return {
-                ...algorithmicRecommendation,
-                recommended_price: blendedPrice,
-                reasoning: `${algorithmicRecommendation.reasoning} AI-adjusted (JSON-parsed, guardrailed) using centralized pricing prompt.`,
-              };
-            }
-          } catch {
-            // Fall through to algorithmic recommendation
+            const repaired = await aiService.generateResponse(repairPrompt, {
+              temperature: 0,
+              topP: 0.9,
+              maxOutputTokens: 4096,
+              responseMimeType: 'application/json',
+            });
+            parsedAmount = repaired ? parseAiInitialAmount(repaired) : { amount: null, error: 'Empty repair response' };
+          } catch (repairErr) {
+            console.log(`      -> AI JSON repair attempt failed: ${(repairErr as Error).message}`);
           }
+        }
+
+        const aiSuggestedPrice = parsedAmount.amount;
+        if (aiSuggestedPrice && algorithmicRecommendation?.recommended_price) {
+          const floor = algorithmicRecommendation.floor_price ?? null;
+          const ceiling = algorithmicRecommendation.ceiling_price ?? null;
+
+          // Guardrails: the AI must stay close to the algorithmic band; otherwise we clamp.
+          const guardedAi = (floor && ceiling)
+            ? Math.round(Math.min(ceiling, Math.max(floor, aiSuggestedPrice)))
+            : aiSuggestedPrice;
+
+          // Weighted blend between algorithmic recommendation and AI suggestion.
+          // Project cargo tends to be underrepresented in historical data; when confidence is LOW and cargo is
+          // machinery/vehicles/oversized, we lean more on the AI.
+          const sourceCargoCat = classifyCargo(sourceQuote.cargo_description);
+          const isProjectCargo = ['MACHINERY', 'VEHICLES', 'OVERSIZED'].includes(sourceCargoCat);
+          const sourceMiles = routeDistance?.distanceMiles ?? null;
+          const useHeavyAiForLowConfidenceProjectCargo =
+            algorithmicRecommendation.confidence === 'LOW' &&
+            (sourceCargoCat === 'MACHINERY' || sourceCargoCat === 'OVERSIZED') &&
+            (typeof sourceMiles === 'number' ? sourceMiles >= 400 : false);
+
+          // For non-project cargo, avoid large AI-driven swings when the algorithmic model is already MEDIUM/HIGH.
+          // This keeps the AI as a small stabilizer rather than a source of new outliers.
+          if (algorithmicRecommendation.confidence !== 'LOW') {
+            const ratio = guardedAi / algorithmicRecommendation.recommended_price;
+            if (!Number.isFinite(ratio) || ratio < 0.85 || ratio > 1.15) {
+              console.log(
+                `      -> AI adjustment ignored (confidence=${algorithmicRecommendation.confidence}, ratio=${ratio.toFixed(2)} outside 0.85..1.15)`
+              );
+              return algorithmicRecommendation;
+            }
+          }
+
+          let blendedPrice: number;
+          if (algorithmicRecommendation.confidence === 'LOW') {
+            if (useHeavyAiForLowConfidenceProjectCargo) {
+              console.log(`      -> Project Cargo Override activated for ${sourceCargoCat}`);
+              blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.25) + (guardedAi * 0.75));
+            } else {
+              console.log(`      -> Low Confidence blend (70/30) activated.`);
+              blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.70) + (guardedAi * 0.30));
+            }
+          } else {
+            blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.85) + (guardedAi * 0.15));
+          }
+
+          console.log(
+            `    AI-enhanced pricing: Algorithmic $${algorithmicRecommendation.recommended_price.toLocaleString()}, AI suggested $${aiSuggestedPrice.toLocaleString()}, Guarded $${guardedAi.toLocaleString()}, Blended $${blendedPrice.toLocaleString()}`
+          );
+
+          return {
+            ...algorithmicRecommendation,
+            recommended_price: blendedPrice,
+            reasoning: `${algorithmicRecommendation.reasoning} AI-adjusted (JSON-parsed, repair-retried, guardrailed) using centralized pricing prompt.`,
+          };
         }
       }
     } catch (aiError) {
@@ -1293,6 +1429,79 @@ function generatePricingPrompt(
   const matchesWithFeedback = topMatches.filter(m => m.feedbackData && m.feedbackData.total_feedback_count > 0);
   const matchesWithVerifiedPrices = topMatches.filter(m => m.feedbackData?.actual_prices_used && m.feedbackData.actual_prices_used.length > 0);
 
+  // Historical price stats (stability + outlier detection)
+  const numericPrices = topMatches
+    .map(m => (typeof m.suggested_price === 'number' ? m.suggested_price : null))
+    .filter((p): p is number => Number.isFinite(p) && p > 0);
+
+  const median = (arr: number[]): number | null => {
+    if (arr.length === 0) return null;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? (sorted[mid - 1]! + sorted[mid]!) / 2
+      : sorted[mid]!;
+  };
+
+  const mean = (arr: number[]): number | null => {
+    if (arr.length === 0) return null;
+    return arr.reduce((s, x) => s + x, 0) / arr.length;
+  };
+
+  const trimmedMean = (arr: number[], trimPctEachSide = 0.2): number | null => {
+    if (arr.length < 3) return mean(arr);
+    const sorted = [...arr].sort((a, b) => a - b);
+    const k = Math.floor(sorted.length * trimPctEachSide);
+    const trimmed = sorted.slice(k, Math.max(k + 1, sorted.length - k));
+    return mean(trimmed);
+  };
+
+  const stddev = (arr: number[]): number | null => {
+    if (arr.length < 2) return null;
+    const m = mean(arr)!;
+    const variance = arr.reduce((s, x) => s + Math.pow(x - m, 2), 0) / (arr.length - 1);
+    return Math.sqrt(variance);
+  };
+
+  const minP = numericPrices.length ? Math.min(...numericPrices) : null;
+  const maxP = numericPrices.length ? Math.max(...numericPrices) : null;
+  const medP = median(numericPrices);
+  const avgP = mean(numericPrices);
+  const tmeanP = trimmedMean(numericPrices, 0.2);
+  const sdP = stddev(numericPrices);
+
+  const bestMatch = topMatches[0];
+  const bestMatchPrice = typeof bestMatch?.suggested_price === 'number' ? bestMatch.suggested_price : null;
+  const bestVsMedianRatio = bestMatchPrice && medP ? Math.round((bestMatchPrice / medP) * 100) / 100 : null;
+
+  const outlierWarning = (bestMatchPrice && medP)
+    ? (bestMatchPrice < medP * 0.6
+      ? 'Best match price looks TOO LOW vs median (possible mismatch, partial price, or unit/charge scope mismatch).'
+      : bestMatchPrice > medP * 1.8
+        ? 'Best match price looks TOO HIGH vs median (possible mismatch or included charges not comparable).'
+        : null)
+    : null;
+
+  const historicalPriceStatsBlock = numericPrices.length > 0
+    ? `
+## HISTORICAL PRICE STATS (from top matches)
+- count_prices: ${numericPrices.length}
+- best_match_price: ${bestMatchPrice ?? 'N/A'}
+- min_price: ${minP ?? 'N/A'}
+- median_price: ${medP ?? 'N/A'}
+- avg_price: ${avgP ? Math.round(avgP) : 'N/A'}
+- trimmed_mean_price: ${tmeanP ? Math.round(tmeanP) : 'N/A'}
+- max_price: ${maxP ?? 'N/A'}
+- stddev_price: ${sdP ? Math.round(sdP) : 'N/A'}
+- best_vs_median_ratio: ${bestVsMedianRatio ?? 'N/A'}
+${outlierWarning ? `- outlier_warning: ${outlierWarning}` : ''}
+
+STABILITY / ANTI-ANCHORING:
+- Prefer median/trimmed_mean as the primary historical anchor when matches disagree.
+- If outlier_warning is present, downweight the best match heavily.
+`
+    : '';
+
   // Format historical matches for prompt context (aligned to formatHistoricalMatches expectations)
   const historicalMatchesForPrompt = topMatches.slice(0, 5).map((m) => ({
     score: m.similarity_score,
@@ -1335,9 +1544,31 @@ function generatePricingPrompt(
 
   // Build quote details section
   const isOOG = isOOGCargo(sourceQuote.cargo_description, sourceQuote.cargo_height, sourceQuote.cargo_width);
+  const sourceCargoCategory = classifyCargo(sourceQuote.cargo_description);
+  const sourceMiles = routeDistance?.distanceMiles ?? (typeof sourceQuote.total_distance_miles === 'number' ? sourceQuote.total_distance_miles : null);
+
+  const hasMissingOrZeroWeight = !sourceQuote.cargo_weight || Number(sourceQuote.cargo_weight) <= 0;
+  const hasMissingOrZeroDims =
+    !sourceQuote.cargo_length || Number(sourceQuote.cargo_length) <= 0 ||
+    !sourceQuote.cargo_width || Number(sourceQuote.cargo_width) <= 0 ||
+    !sourceQuote.cargo_height || Number(sourceQuote.cargo_height) <= 0;
+
+  const projectCargoLongHaulMissingSpecsNote =
+    (sourceCargoCategory === 'MACHINERY' || sourceCargoCategory === 'OVERSIZED') &&
+    typeof sourceMiles === 'number' &&
+    sourceMiles >= 400 &&
+    (hasMissingOrZeroWeight || hasMissingOrZeroDims)
+      ? `
+## PROJECT CARGO PRICING NOTE (IMPORTANT)
+- Cargo category appears to be ${sourceCargoCategory} on a long-haul route.
+- Weight/dimensions are missing/zero; do NOT assume light/general freight.
+- When applying per-mile project cargo logic, avoid selecting the minimum rate unless the quote explicitly indicates an easy/light load.
+- Include a risk buffer for unknown specs (equipment type, permits, loading constraints, accessorials).
+`
+      : '';
   const baselineInfo = algorithmicRecommendation?.recommended_price
     ? `
-## ALGORITHMIC BASELINE (USE AS PRIMARY ANCHOR)
+## ALGORITHMIC BASELINE (REFERENCE, NOT A HARD ANCHOR)
 - recommended_price: $${algorithmicRecommendation.recommended_price.toLocaleString()}
 - floor_price: ${algorithmicRecommendation.floor_price ? '$' + algorithmicRecommendation.floor_price.toLocaleString() : 'N/A'}
 - ceiling_price: ${algorithmicRecommendation.ceiling_price ? '$' + algorithmicRecommendation.ceiling_price.toLocaleString() : 'N/A'}
@@ -1357,11 +1588,38 @@ CONSTRAINTS:
   const quoteDetails = `
 ## NEW QUOTE REQUEST
 - **Route**: ${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_state_province || ''} ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_state_province || ''} ${sourceQuote.destination_country || ''}${distanceInfo}
+- **Origin Address**: ${sourceQuote.origin_full_address || 'Not specified'}
+- **Origin Postal Code**: ${sourceQuote.origin_postal_code || 'Not specified'}
+- **Origin Facility Type**: ${sourceQuote.origin_facility_type || 'Not specified'}
+- **Destination Address**: ${sourceQuote.destination_full_address || 'Not specified'}
+- **Destination Postal Code**: ${sourceQuote.destination_postal_code || 'Not specified'}
+- **Destination Facility Type**: ${sourceQuote.destination_facility_type || 'Not specified'}
+- **Requested Pickup Date**: ${sourceQuote.requested_pickup_date || 'Not specified'}
+- **Pickup Time Window**: ${sourceQuote.pickup_time_window || 'Not specified'}
+- **Pickup Special Requirements**: ${sourceQuote.pickup_special_requirements || 'Not specified'}
+- **Requested Delivery Date**: ${sourceQuote.requested_delivery_date || 'Not specified'}
+- **Delivery Time Window**: ${sourceQuote.delivery_time_window || 'Not specified'}
+- **Delivery Special Requirements**: ${sourceQuote.delivery_special_requirements || 'Not specified'}
 - **Service Type**: ${sourceQuote.service_type || 'Not specified'}
+- **Service Level**: ${sourceQuote.service_level || 'Not specified'}
+- **Incoterms**: ${sourceQuote.incoterms || 'Not specified'}
+- **Customs Clearance Needed**: ${sourceQuote.customs_clearance_needed ? 'Yes' : 'No/Not specified'}
 - **Cargo Description**: ${sourceQuote.cargo_description || 'Not specified'}
 - **Weight**: ${sourceQuote.cargo_weight || 'Not specified'} ${sourceQuote.weight_unit || ''}
 - **Pieces**: ${sourceQuote.number_of_pieces || 'Not specified'}
 - **Hazmat**: ${sourceQuote.hazardous_material ? 'Yes' : 'No'}
+- **Hazmat Class / UN**: ${sourceQuote.hazmat_class || 'Not specified'} / ${sourceQuote.hazmat_un_number || 'Not specified'}
+- **Temperature Controlled**: ${sourceQuote.temperature_controlled ? 'Yes' : 'No/Not specified'}
+- **Temperature Range**: ${sourceQuote.temperature_range || 'Not specified'}
+- **Declared Value**: ${sourceQuote.declared_value ? `${sourceQuote.declared_value} ${sourceQuote.declared_value_currency || ''}` : 'Not specified'}
+- **Packaging Type**: ${sourceQuote.packaging_type || 'Not specified'}
+- **Dimensions (L×W×H)**: ${sourceQuote.cargo_length ?? 'N/A'}×${sourceQuote.cargo_width ?? 'N/A'}×${sourceQuote.cargo_height ?? 'N/A'} ${sourceQuote.dimension_unit || ''}
+- **Overweight/Oversize Flags**: overweight=${sourceQuote.is_overweight ? 'Yes' : 'No/Not specified'}, oversized=${sourceQuote.is_oversized ? 'Yes' : 'No/Not specified'}
+- **Permits / Pilot Car / Tarping**: permits=${sourceQuote.requires_permits ? 'Yes' : 'No/Not specified'}, pilot_car=${sourceQuote.requires_pilot_car ? 'Yes' : 'No/Not specified'}, tarping=${sourceQuote.requires_tarping ? 'Yes' : 'No/Not specified'}
+- **Equipment Requested**: ${sourceQuote.equipment_type_requested || 'Not specified'}
+- **Equipment Quoted**: ${sourceQuote.equipment_type_quoted || 'Not specified'}
+- **Trailer Length Required**: ${sourceQuote.trailer_length_required || 'Not specified'}
+- **Load Type**: ${sourceQuote.load_type || 'Not specified'}
 - **Container Type**: ${detectContainerType(sourceQuote.cargo_description, sourceQuote.service_type) || 'Standard/Not specified'}
 - **OOG (Out of Gauge)**: ${isOOG ? 'YES - Apply 1.35-1.45x pricing multiplier' : 'No'}
 ${isOOG ? `
@@ -1377,6 +1635,8 @@ ${isOOG ? `
 - For Drayage: Use distance category "${getDistanceCategory(routeDistance.distanceMiles)}" for base rate reference
 - Estimated transit: ${routeDistance.durationText}
 ` : ''}
+
+${projectCargoLongHaulMissingSpecsNote}
 ${matchesWithFeedback.length > 0 ? `
 ## FEEDBACK INSIGHTS
 - **Matches with User Feedback**: ${matchesWithFeedback.length} of ${topMatches.slice(0, 5).length}
@@ -1384,6 +1644,8 @@ ${matchesWithFeedback.length > 0 ? `
 ${matchesWithVerifiedPrices.length > 0 ? `
 **IMPORTANT**: Matches with verified actual prices should be weighted more heavily as these represent real-world pricing accepted by customers.
 ` : ''}` : ''}
+
+${historicalPriceStatsBlock}
 
 ${baselineInfo}
 

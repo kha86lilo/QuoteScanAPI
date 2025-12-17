@@ -30,7 +30,7 @@ export function getAIService(provider: string | null = null): BaseAIService {
   const selectedProvider = (
     provider ||
     process.env.AI_PROVIDER ||
-    AI_PROVIDERS.CHATGPT
+    AI_PROVIDERS.GEMINI
   ).toLowerCase();
 
   switch (selectedProvider) {
@@ -133,7 +133,7 @@ export function getProviderInfo(): AIProviderInfo {
       chatgpt: !!process.env.GPT_API_KEY,
     },
     models: {
-      gemini: process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-05-20',
+      gemini: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
       claude: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
       chatgpt: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     },

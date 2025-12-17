@@ -4,7 +4,7 @@
  */
 
 import OpenAI from 'openai';
-import BaseAIService from './BaseAIService.js';
+import BaseAIService, { type GenerationOptions } from './BaseAIService.js';
 import type { Email, ParsedEmailData } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -75,10 +75,14 @@ class ChatGPTService extends BaseAIService {
   /**
    * Generate a response from a prompt
    */
-  async generateResponse(prompt: string): Promise<string> {
+  async generateResponse(prompt: string, options: GenerationOptions = {}): Promise<string> {
     const completion = await this.client.chat.completions.create({
       model: this.modelName,
-      temperature: 0,
+      temperature: options.temperature ?? 0,
+      ...(typeof options.maxOutputTokens === 'number' ? { max_tokens: options.maxOutputTokens } : {}),
+      ...(options.responseMimeType === 'application/json'
+        ? ({ response_format: { type: 'json_object' } } as any)
+        : {}),
       messages: [
         {
           role: 'system',

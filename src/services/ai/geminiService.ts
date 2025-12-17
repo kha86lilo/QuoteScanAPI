@@ -4,7 +4,7 @@
  */
 
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
-import BaseAIService from './BaseAIService.js';
+import BaseAIService, { type GenerationOptions } from './BaseAIService.js';
 import type { Email, ParsedEmailData } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -44,7 +44,7 @@ class GeminiService extends BaseAIService {
     super('Gemini');
     const apiKey = process.env.GEMINI_API_KEY || '';
     this.client = new GoogleGenerativeAI(apiKey);
-    this.modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-05-20';
+    this.modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
     this.model = this.client.getGenerativeModel({ model: this.modelName });
   }
 
@@ -81,11 +81,40 @@ class GeminiService extends BaseAIService {
   /**
    * Generate a response from a prompt
    */
-  async generateResponse(prompt: string): Promise<string> {
+  async generateResponse(prompt: string, options: GenerationOptions = {}): Promise<string> {
+    const generationConfig: Record<string, unknown> = {
+      temperature: options.temperature ?? 0.2,
+      topP: options.topP ?? 0.9,
+      ...(typeof options.topK === 'number' ? { topK: options.topK } : {}),
+      ...(typeof options.maxOutputTokens === 'number' ? { maxOutputTokens: options.maxOutputTokens } : {}),
+      ...(typeof options.responseMimeType === 'string' ? { responseMimeType: options.responseMimeType } : {}),
+    };
+
     const result = await this.model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    });
-    return (await result.response.text()).trim();
+      generationConfig,
+    } as any);
+
+    const primaryText = (await result.response.text()).trim();
+    if (primaryText) return primaryText;
+
+    // Some SDK responses (notably JSON mime types) may not populate response.text().
+    const parts = (result.response as any)?.candidates?.[0]?.content?.parts;
+    const fallbackText = Array.isArray(parts)
+      ? parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('').trim()
+      : '';
+
+    if (fallbackText) return fallbackText;
+
+    const candidates = (result.response as any)?.candidates;
+    const candidateCount = Array.isArray(candidates) ? candidates.length : 0;
+    const finishReason = candidates?.[0]?.finishReason || candidates?.[0]?.finish_reason || null;
+    const promptFeedback = (result.response as any)?.promptFeedback || (result.response as any)?.prompt_feedback || null;
+    const blockReason = promptFeedback?.blockReason || promptFeedback?.block_reason || null;
+
+    throw new Error(
+      `Gemini returned empty response (candidates=${candidateCount}, finishReason=${finishReason ?? 'n/a'}, blockReason=${blockReason ?? 'n/a'})`
+    );
   }
 
   /**

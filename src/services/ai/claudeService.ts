@@ -4,7 +4,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import BaseAIService from './BaseAIService.js';
+import BaseAIService, { type GenerationOptions } from './BaseAIService.js';
 import type { Email, ParsedEmailData } from '../../types/index.js';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -60,10 +60,11 @@ class ClaudeService extends BaseAIService {
   /**
    * Generate a response from a prompt
    */
-  async generateResponse(prompt: string): Promise<string> {
+  async generateResponse(prompt: string, options: GenerationOptions = {}): Promise<string> {
     const message = await this.client.messages.create({
       model: this.modelName,
-      max_tokens: 4000,
+      max_tokens: options.maxOutputTokens ?? 4000,
+      ...(typeof options.temperature === 'number' ? { temperature: options.temperature } : {}),
       messages: [{ role: 'user', content: prompt }],
     });
     const content = message.content[0];
