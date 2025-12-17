@@ -124,21 +124,280 @@ const CARGO_CATEGORIES: Record<string, string[]> = {
 // 2. Service type is critical - different pricing models
 // 3. Cargo category matters but not as much when we have good distance data
 // 4. Recency helps but don't overprioritize
+// 5. Piece count increased for LTL/partial loads
+// 6. Equipment type added for specialized cargo
 const ENHANCED_WEIGHTS: Record<string, number> = {
-  origin_region: 0.08,
+  origin_region: 0.07,
   origin_city: 0.04,
-  destination_region: 0.10,
+  destination_region: 0.09,
   destination_city: 0.04,
-  cargo_category: 0.12,
+  cargo_category: 0.11,
   cargo_weight_range: 0.08,
-  number_of_pieces: 0.03,
-  service_type: 0.14,
+  cargo_weight_actual: 0.04,  // NEW: actual weight comparison
+  number_of_pieces: 0.05,     // INCREASED from 0.03
+  service_type: 0.13,
   service_compatibility: 0.04,
   hazmat: 0.06,
   container_type: 0.04,
-  recency: 0.06,
-  distance_similarity: 0.20,
+  equipment_type: 0.04,       // NEW: equipment matching
+  recency: 0.05,
+  distance_similarity: 0.18,
 };
+
+// =============================================================================
+// FALLBACK PRICING SYSTEM - Used when no historical matches are found
+// =============================================================================
+
+/**
+ * Base rates per mile by service type (USD)
+ * These are industry-average rates used as fallback when no matches exist
+ * Updated periodically based on market conditions
+ */
+const BASE_RATES_PER_MILE: Record<string, { min: number; avg: number; max: number }> = {
+  'GROUND': { min: 2.50, avg: 3.25, max: 4.50 },      // FTL dry van
+  'DRAYAGE': { min: 3.50, avg: 5.00, max: 8.00 },     // Port drayage (higher due to fees)
+  'OCEAN': { min: 0.15, avg: 0.25, max: 0.40 },       // Ocean per mile equivalent (long distance)
+  'INTERMODAL': { min: 1.80, avg: 2.40, max: 3.20 },  // Rail + truck combo
+  'AIR': { min: 8.00, avg: 12.00, max: 20.00 },       // Air freight premium
+  'TRANSLOAD': { min: 3.00, avg: 4.50, max: 6.50 },   // Cross-dock operations
+  'UNKNOWN': { min: 2.80, avg: 3.50, max: 5.00 },     // Default fallback
+};
+
+/**
+ * Minimum charges by service type (USD)
+ * Applied when distance-based calculation falls below these thresholds
+ */
+const MINIMUM_CHARGES: Record<string, number> = {
+  'GROUND': 350,
+  'DRAYAGE': 450,      // Port fees, chassis, etc.
+  'OCEAN': 800,        // Minimum ocean booking
+  'INTERMODAL': 600,
+  'AIR': 500,
+  'TRANSLOAD': 400,
+  'STORAGE': 150,
+  'UNKNOWN': 400,
+};
+
+/**
+ * Regional rate multipliers - some regions are more expensive
+ */
+const REGIONAL_MULTIPLIERS: Record<string, number> = {
+  'WEST_COAST': 1.15,    // Higher costs in CA, WA, OR
+  'NORTHEAST': 1.10,     // Dense traffic, tolls
+  'SOUTHEAST': 0.95,     // Generally lower costs
+  'GULF': 1.00,          // Baseline
+  'MIDWEST': 0.95,       // Lower costs
+  'CENTRAL': 0.95,
+  'ASIA_PACIFIC': 1.05,  // International premium
+  'EUROPE': 1.10,
+  'CANADA': 1.08,        // Cross-border fees
+  'OTHER': 1.00,
+};
+
+/**
+ * Cargo category multipliers for specialized handling
+ */
+const CARGO_MULTIPLIERS: Record<string, number> = {
+  'MACHINERY': 1.35,     // Heavy equipment requires specialized trailers
+  'VEHICLES': 1.20,      // Vehicle transport premium
+  'OVERSIZED': 1.60,     // Permits, escorts, special equipment
+  'HAZMAT': 1.45,        // Hazmat certification, insurance, placards
+  'INDUSTRIAL': 1.15,    // Steel, coils - heavy but standard
+  'CONTAINERS': 1.00,    // Standard container rates
+  'AGRICULTURAL': 0.90,  // Often bulk, simpler handling
+  'GENERAL': 1.00,       // Baseline
+  'UNKNOWN': 1.05,       // Small premium for uncertainty
+};
+
+/**
+ * Weight-based surcharges (per 1000 lbs over standard)
+ */
+const WEIGHT_SURCHARGES: Record<string, number> = {
+  'LIGHT': 0,
+  'MEDIUM': 0,
+  'HEAVY': 50,           // $50 per 1000 lbs
+  'VERY_HEAVY': 100,     // $100 per 1000 lbs
+  'PROJECT': 200,        // $200 per 1000 lbs - requires permits
+};
+
+/**
+ * Equipment type base rates and multipliers
+ */
+const EQUIPMENT_RATES: Record<string, { baseRate: number; multiplier: number }> = {
+  'DRY_VAN': { baseRate: 0, multiplier: 1.0 },
+  'FLATBED': { baseRate: 150, multiplier: 1.20 },
+  'STEP_DECK': { baseRate: 200, multiplier: 1.30 },
+  'LOWBOY': { baseRate: 400, multiplier: 1.50 },
+  'REEFER': { baseRate: 300, multiplier: 1.35 },
+  'TANKER': { baseRate: 250, multiplier: 1.25 },
+  'CONESTOGA': { baseRate: 200, multiplier: 1.25 },
+  'POWER_ONLY': { baseRate: -100, multiplier: 0.85 },
+  'HOTSHOT': { baseRate: 100, multiplier: 1.15 },
+};
+
+/**
+ * Detect equipment type from cargo description and service type
+ */
+function detectEquipmentType(
+  cargoDescription: string | null | undefined,
+  serviceType: string | null | undefined,
+  equipmentRequested: string | null | undefined
+): string {
+  // First check explicit equipment request
+  if (equipmentRequested) {
+    const lower = equipmentRequested.toLowerCase();
+    if (lower.includes('flatbed') || lower.includes('flat bed')) return 'FLATBED';
+    if (lower.includes('step') || lower.includes('drop deck')) return 'STEP_DECK';
+    if (lower.includes('lowboy') || lower.includes('low boy') || lower.includes('rgn')) return 'LOWBOY';
+    if (lower.includes('reefer') || lower.includes('refrigerat')) return 'REEFER';
+    if (lower.includes('tanker') || lower.includes('tank')) return 'TANKER';
+    if (lower.includes('conestoga') || lower.includes('curtain')) return 'CONESTOGA';
+    if (lower.includes('power only') || lower.includes('tow away')) return 'POWER_ONLY';
+    if (lower.includes('hotshot') || lower.includes('expedite')) return 'HOTSHOT';
+    if (lower.includes('dry van') || lower.includes('van')) return 'DRY_VAN';
+  }
+
+  // Infer from cargo description
+  const cargo = (cargoDescription || '').toLowerCase();
+  if (cargo.includes('excavator') || cargo.includes('dozer') || cargo.includes('crane') ||
+      cargo.includes('lowboy') || cargo.includes('heavy equipment')) return 'LOWBOY';
+  if (cargo.includes('flatbed') || cargo.includes('steel') || cargo.includes('lumber') ||
+      cargo.includes('pipe') || cargo.includes('beam')) return 'FLATBED';
+  if (cargo.includes('refrigerat') || cargo.includes('frozen') || cargo.includes('cold') ||
+      cargo.includes('produce') || cargo.includes('perishable')) return 'REEFER';
+  if (cargo.includes('chemical') || cargo.includes('liquid') || cargo.includes('fuel')) return 'TANKER';
+  if (cargo.includes('oversize') || cargo.includes('over dimension')) return 'STEP_DECK';
+
+  return 'DRY_VAN';
+}
+
+interface FallbackPricingResult {
+  price: number;
+  priceRange: PriceRange;
+  confidence: 'LOW' | 'VERY_LOW';
+  reasoning: string;
+  breakdown: {
+    baseRate: number;
+    distanceCharge: number;
+    minimumApplied: boolean;
+    regionalMultiplier: number;
+    cargoMultiplier: number;
+    weightSurcharge: number;
+    equipmentCharge: number;
+    hazmatSurcharge: number;
+  };
+}
+
+/**
+ * Calculate fallback pricing when no historical matches are found
+ * Uses industry-standard rates adjusted for service type, region, cargo, and equipment
+ */
+function calculateFallbackPricing(
+  quote: Quote,
+  distanceMiles: number | null | undefined
+): FallbackPricingResult {
+  const serviceType = normalizeServiceType(quote.service_type);
+  const cargoCategory = classifyCargo(quote.cargo_description);
+  const weightRange = getWeightRange(quote.cargo_weight, quote.weight_unit);
+  const equipmentType = detectEquipmentType(
+    quote.cargo_description,
+    quote.service_type,
+    quote.equipment_type_requested
+  );
+
+  // Get base rates for service type
+  const rates = BASE_RATES_PER_MILE[serviceType] || BASE_RATES_PER_MILE['UNKNOWN']!;
+  const minCharge = MINIMUM_CHARGES[serviceType] || MINIMUM_CHARGES['UNKNOWN']!;
+
+  // Calculate regional multiplier
+  const originRegion = getUSRegion(quote.origin_city, quote.origin_state_province) ||
+                       getIntlRegion(quote.origin_country) || 'OTHER';
+  const destRegion = getUSRegion(quote.destination_city, quote.destination_state_province) ||
+                     getIntlRegion(quote.destination_country) || 'OTHER';
+  const originMult = REGIONAL_MULTIPLIERS[originRegion] || 1.0;
+  const destMult = REGIONAL_MULTIPLIERS[destRegion] || 1.0;
+  const regionalMultiplier = (originMult + destMult) / 2;
+
+  // Cargo multiplier
+  const cargoMultiplier = CARGO_MULTIPLIERS[cargoCategory] || 1.0;
+
+  // Weight surcharge
+  const weightLabel = weightRange?.label || 'MEDIUM';
+  const weightSurchargePerK = WEIGHT_SURCHARGES[weightLabel] || 0;
+  const weightKg = parseFloat(String(quote.cargo_weight || 0));
+  const weightLbs = weightKg * 2.20462;
+  const weightSurcharge = Math.max(0, (weightLbs - 5000) / 1000) * weightSurchargePerK;
+
+  // Equipment charges
+  const equipmentInfo = EQUIPMENT_RATES[equipmentType] || EQUIPMENT_RATES['DRY_VAN']!;
+  const equipmentCharge = equipmentInfo.baseRate;
+  const equipmentMultiplier = equipmentInfo.multiplier;
+
+  // Hazmat surcharge
+  const hazmatSurcharge = quote.hazardous_material ? 350 : 0;
+
+  // Calculate distance-based charge
+  const effectiveDistance = distanceMiles || 200; // Default 200 miles if unknown
+  const baseDistanceCharge = effectiveDistance * rates.avg;
+
+  // Apply all multipliers
+  let totalPrice = baseDistanceCharge * regionalMultiplier * cargoMultiplier * equipmentMultiplier;
+  totalPrice += weightSurcharge + equipmentCharge + hazmatSurcharge;
+
+  // Apply minimum charge
+  const minimumApplied = totalPrice < minCharge;
+  totalPrice = Math.max(totalPrice, minCharge);
+
+  // Calculate price range
+  const lowPrice = Math.max(
+    minCharge,
+    effectiveDistance * rates.min * regionalMultiplier * cargoMultiplier * 0.9
+  );
+  const highPrice = effectiveDistance * rates.max * regionalMultiplier * cargoMultiplier * 1.15 +
+                    weightSurcharge + equipmentCharge + hazmatSurcharge;
+
+  // Round to nearest $25
+  const roundedPrice = Math.round(totalPrice / 25) * 25;
+  const roundedLow = Math.round(lowPrice / 25) * 25;
+  const roundedHigh = Math.round(highPrice / 25) * 25;
+
+  // Build reasoning
+  const reasoningParts: string[] = [
+    `Fallback pricing (no historical matches)`,
+    `Service: ${serviceType}`,
+    `Distance: ${effectiveDistance.toFixed(0)} mi`,
+    `Base rate: $${rates.avg.toFixed(2)}/mi`,
+  ];
+  if (regionalMultiplier !== 1.0) {
+    reasoningParts.push(`Regional adj: ${((regionalMultiplier - 1) * 100).toFixed(0)}%`);
+  }
+  if (cargoMultiplier !== 1.0) {
+    reasoningParts.push(`Cargo (${cargoCategory}): ${((cargoMultiplier - 1) * 100).toFixed(0)}%`);
+  }
+  if (equipmentType !== 'DRY_VAN') {
+    reasoningParts.push(`Equipment (${equipmentType}): +$${equipmentCharge}`);
+  }
+  if (hazmatSurcharge > 0) {
+    reasoningParts.push(`Hazmat: +$${hazmatSurcharge}`);
+  }
+
+  return {
+    price: roundedPrice,
+    priceRange: { low: roundedLow, high: roundedHigh },
+    confidence: distanceMiles ? 'LOW' : 'VERY_LOW',
+    reasoning: reasoningParts.join('. '),
+    breakdown: {
+      baseRate: rates.avg,
+      distanceCharge: baseDistanceCharge,
+      minimumApplied,
+      regionalMultiplier,
+      cargoMultiplier,
+      weightSurcharge,
+      equipmentCharge,
+      hazmatSurcharge,
+    },
+  };
+}
 
 const WEIGHT_RANGES: WeightRange[] = [
   { min: 0, max: 500, label: 'LIGHT', multiplier: 1.0 },
@@ -412,20 +671,89 @@ function jaroWinklerSimilarity(s1: string | null | undefined, s2: string | null 
 }
 
 /**
+ * Calculate city match score using exact matching with normalization
+ * Avoids false positives from fuzzy matching (e.g., "Newark" vs "New York")
+ * Returns 1.0 for exact match, 0.7 for same city different spelling, 0.0 for different cities
+ */
+function calculateCityMatchScore(
+  city1: string | null | undefined,
+  city2: string | null | undefined,
+  state1?: string | null,
+  state2?: string | null
+): number {
+  if (!city1 || !city2) return 0.0;
+
+  // Normalize city names: lowercase, remove common suffixes, trim whitespace
+  const normalizeCity = (city: string): string => {
+    return city
+      .toLowerCase()
+      .trim()
+      .replace(/\s+(city|town|township|village|borough|port|harbor|harbour)$/i, '')
+      .replace(/[.,]/g, '')
+      .replace(/\s+/g, ' ');
+  };
+
+  const norm1 = normalizeCity(city1);
+  const norm2 = normalizeCity(city2);
+
+  // Exact match after normalization
+  if (norm1 === norm2) {
+    return 1.0;
+  }
+
+  // Check for common city name variations/abbreviations
+  const CITY_ALIASES: Record<string, string[]> = {
+    'los angeles': ['la', 'l.a.'],
+    'new york': ['nyc', 'ny'],
+    'san francisco': ['sf', 'san fran'],
+    'long beach': ['lb'],
+    'fort worth': ['ft worth', 'ft. worth'],
+    'st louis': ['saint louis', 'st. louis'],
+    'st paul': ['saint paul', 'st. paul'],
+  };
+
+  // Check if cities are aliases of each other
+  for (const [canonical, aliases] of Object.entries(CITY_ALIASES)) {
+    const allVariants = [canonical, ...aliases];
+    if (allVariants.includes(norm1) && allVariants.includes(norm2)) {
+      return 1.0;
+    }
+  }
+
+  // If states are provided and match, give partial credit for same-state different city
+  // This helps when city names have minor variations but are clearly same metro area
+  if (state1 && state2) {
+    const normState1 = state1.toLowerCase().trim();
+    const normState2 = state2.toLowerCase().trim();
+    if (normState1 === normState2) {
+      // Same state - check if cities share significant prefix (e.g., "North Chicago" vs "Chicago")
+      const shorter = norm1.length < norm2.length ? norm1 : norm2;
+      const longer = norm1.length < norm2.length ? norm2 : norm1;
+      if (longer.includes(shorter) && shorter.length >= 4) {
+        return 0.7; // Partial match - likely same metro area
+      }
+    }
+  }
+
+  // Different cities
+  return 0.0;
+}
+
+/**
  * Calculate similarity between two route distances
  * Returns 1.0 for identical distances, decaying toward 0 as difference grows
- * Returns 0.4 if either distance is unavailable
- * 
- * TUNED: Uses softer linear decay so 50% difference = 0.5 score
- * Shipping prices correlate with distance but many other factors matter
+ * Returns 0.2 if either distance is unavailable (low score for unknown data)
+ *
+ * TUNED: More aggressive penalties - shipping costs scale heavily with distance
+ * A 50% distance mismatch should significantly penalize the match
  */
 function calculateDistanceSimilarity(
   sourceDistance: number | null | undefined,
   historicalDistance: number | null | undefined
 ): number {
-  // If either distance is unavailable, return moderate score (not too punitive)
+  // If either distance is unavailable, return LOW score - unknown distance is risky
   if (!sourceDistance || !historicalDistance || sourceDistance <= 0 || historicalDistance <= 0) {
-    return 0.4;
+    return 0.2;
   }
 
   // Calculate percentage difference
@@ -434,19 +762,19 @@ function calculateDistanceSimilarity(
   const diff = maxDist - minDist;
   const percentDiff = diff / maxDist;
 
-  // Use banded scoring for more stable matches:
-  // 0-10% diff = 1.0 (excellent match)
-  // 10-25% diff = 0.85 (good match)
-  // 25-50% diff = 0.65 (acceptable match)
-  // 50-75% diff = 0.45 (weak match)
-  // 75-100% diff = 0.25 (poor match)
-  // >100% diff = 0.1 (very poor)
+  // More aggressive banded scoring for realistic matches:
+  // 0-10% diff = 1.0 (excellent match - nearly identical routes)
+  // 10-20% diff = 0.85 (good match)
+  // 20-35% diff = 0.60 (acceptable match - some price variance expected)
+  // 35-50% diff = 0.40 (weak match - significant price difference likely)
+  // 50-75% diff = 0.20 (poor match - probably different service categories)
+  // >75% diff = 0.05 (very poor - should rarely be used)
   if (percentDiff <= 0.10) return 1.0;
-  if (percentDiff <= 0.25) return 0.85;
-  if (percentDiff <= 0.50) return 0.65;
-  if (percentDiff <= 0.75) return 0.45;
-  if (percentDiff <= 1.00) return 0.25;
-  return 0.1;
+  if (percentDiff <= 0.20) return 0.85;
+  if (percentDiff <= 0.35) return 0.60;
+  if (percentDiff <= 0.50) return 0.40;
+  if (percentDiff <= 0.75) return 0.20;
+  return 0.05;
 }
 
 interface SimilarityResult {
@@ -472,7 +800,12 @@ function calculateEnhancedSimilarity(
                            getIntlRegion(historicalQuote.origin_country);
 
   criteria.origin_region = sourceOriginRegion && histOriginRegion && sourceOriginRegion === histOriginRegion ? 1 : 0;
-  criteria.origin_city = jaroWinklerSimilarity(sourceQuote.origin_city, historicalQuote.origin_city);
+  // Use exact city match (normalized) instead of fuzzy Jaro-Winkler to avoid false positives
+  // e.g., "Newark" vs "New York" are different ports with different pricing
+  criteria.origin_city = calculateCityMatchScore(
+    sourceQuote.origin_city, historicalQuote.origin_city,
+    sourceQuote.origin_state_province, historicalQuote.origin_state_province
+  );
 
   totalScore += (criteria.origin_region || 0) * ENHANCED_WEIGHTS.origin_region!;
   totalScore += (criteria.origin_city || 0) * ENHANCED_WEIGHTS.origin_city!;
@@ -485,7 +818,11 @@ function calculateEnhancedSimilarity(
                          getIntlRegion(historicalQuote.destination_country);
 
   criteria.destination_region = sourceDestRegion && histDestRegion && sourceDestRegion === histDestRegion ? 1 : 0;
-  criteria.destination_city = jaroWinklerSimilarity(sourceQuote.destination_city, historicalQuote.destination_city);
+  // Use exact city match (normalized) instead of fuzzy Jaro-Winkler
+  criteria.destination_city = calculateCityMatchScore(
+    sourceQuote.destination_city, historicalQuote.destination_city,
+    sourceQuote.destination_state_province, historicalQuote.destination_state_province
+  );
 
   totalScore += (criteria.destination_region || 0) * ENHANCED_WEIGHTS.destination_region!;
   totalScore += (criteria.destination_city || 0) * ENHANCED_WEIGHTS.destination_city!;
@@ -518,10 +855,24 @@ function calculateEnhancedSimilarity(
     (sourceService === 'INTERMODAL' && histService === 'OCEAN')
   );
 
-  // Drayage pricing is extremely distance-sensitive; don't mix in longer-haul ground on short routes.
-  const compatible = (sourceService === 'DRAYAGE' && sourceIsShortHaul)
-    ? ['DRAYAGE']
-    : (SERVICE_COMPATIBILITY[sourceService] || []);
+  // Drayage and Ground have VERY different pricing models:
+  // - Drayage: port fees, chassis fees, demurrage, per-move pricing
+  // - Ground FTL: per-mile, fuel surcharge, accessorials
+  // Only allow cross-matching when BOTH are short-haul (under 150 miles)
+  const histIsShortHaul = (historicalDistance ?? 0) > 0 && (historicalDistance as number) < 150;
+
+  let compatible: string[];
+  if (sourceService === 'DRAYAGE' || sourceService === 'GROUND') {
+    if (sourceIsShortHaul && histIsShortHaul) {
+      // Both short-haul - allow cross-matching
+      compatible = ['DRAYAGE', 'GROUND'];
+    } else {
+      // At least one is long-haul - require exact service match
+      compatible = [sourceService];
+    }
+  } else {
+    compatible = SERVICE_COMPATIBILITY[sourceService] || [];
+  }
 
   // Apply heavy penalty for lane type mismatch on ocean/intermodal services
   let serviceCompatScore = (compatible.includes(histService) || intlOceanIntermodalCompatible) ? 0.8 : 0;
@@ -536,34 +887,101 @@ function calculateEnhancedSimilarity(
   totalScore += serviceScore * (ENHANCED_WEIGHTS.service_type! + ENHANCED_WEIGHTS.service_compatibility!);
   totalWeight += ENHANCED_WEIGHTS.service_type! + ENHANCED_WEIGHTS.service_compatibility!;
 
-  // Cargo Matching
+  // Cargo Matching - stricter with explicit incompatibilities
   const sourceCargoCat = classifyCargo(sourceQuote.cargo_description);
   const histCargoCat = classifyCargo(historicalQuote.cargo_description);
 
+  // Define cargo categories that should NEVER match each other
+  const CARGO_INCOMPATIBLE: Record<string, string[]> = {
+    'MACHINERY': ['AGRICULTURAL', 'HAZMAT', 'GENERAL'],
+    'VEHICLES': ['AGRICULTURAL', 'HAZMAT', 'INDUSTRIAL'],
+    'HAZMAT': ['AGRICULTURAL', 'VEHICLES', 'MACHINERY', 'GENERAL'],
+    'OVERSIZED': ['AGRICULTURAL', 'GENERAL'],
+    'AGRICULTURAL': ['MACHINERY', 'VEHICLES', 'HAZMAT', 'OVERSIZED', 'INDUSTRIAL'],
+  };
+
   const neutralCargoCats = new Set(['GENERAL', 'UNKNOWN']);
-  criteria.cargo_category = sourceCargoCat === histCargoCat ? 1 :
-                           (neutralCargoCats.has(sourceCargoCat) || neutralCargoCats.has(histCargoCat) ? 0.5 : 0);
+  let cargoScore: number;
+
+  if (sourceCargoCat === histCargoCat) {
+    cargoScore = 1.0;
+  } else if (CARGO_INCOMPATIBLE[sourceCargoCat]?.includes(histCargoCat) ||
+             CARGO_INCOMPATIBLE[histCargoCat]?.includes(sourceCargoCat)) {
+    // Hard incompatibility - these cargo types have very different handling/pricing
+    cargoScore = 0.0;
+  } else if (neutralCargoCats.has(sourceCargoCat) || neutralCargoCats.has(histCargoCat)) {
+    // Unknown/General cargo - lower score since we can't verify compatibility
+    cargoScore = 0.3;
+  } else {
+    // Different but not explicitly incompatible categories
+    cargoScore = 0.15;
+  }
+  criteria.cargo_category = cargoScore;
 
   totalScore += (criteria.cargo_category || 0) * ENHANCED_WEIGHTS.cargo_category!;
   totalWeight += ENHANCED_WEIGHTS.cargo_category!;
 
-  // Weight Matching - less strict to allow more matches
+  // Weight Matching - stricter to avoid unrealistic matches
   const sourceWeightRange = getWeightRange(sourceQuote.cargo_weight, sourceQuote.weight_unit);
   const histWeightRange = getWeightRange(historicalQuote.cargo_weight, historicalQuote.weight_unit);
 
   if (sourceWeightRange && histWeightRange) {
     const weightDiff = Math.abs(WEIGHT_RANGES.indexOf(sourceWeightRange) - WEIGHT_RANGES.indexOf(histWeightRange));
-    // TUNED: Softer penalties for weight class differences
-    // Same: 1.0, ±1 class: 0.7, ±2 classes: 0.4, ±3+ classes: 0.2
+    // Stricter penalties for weight class differences:
+    // Same: 1.0, ±1 class: 0.65, ±2 classes: 0.25, ±3+ classes: 0.0 (hard rejection)
+    // Weight dramatically affects equipment, fuel, and pricing
     criteria.cargo_weight_range = weightDiff === 0 ? 1.0 :
-                                  weightDiff === 1 ? 0.7 :
-                                  weightDiff === 2 ? 0.4 : 0.2;
+                                  weightDiff === 1 ? 0.65 :
+                                  weightDiff === 2 ? 0.25 : 0.0;
   } else {
-    criteria.cargo_weight_range = 0.5; // Neutral default when weight unknown
+    criteria.cargo_weight_range = 0.35; // Lower default when weight unknown - risky assumption
   }
 
   totalScore += (criteria.cargo_weight_range || 0) * ENHANCED_WEIGHTS.cargo_weight_range!;
   totalWeight += ENHANCED_WEIGHTS.cargo_weight_range!;
+
+  // Actual Weight Comparison (more granular than weight range)
+  const sourceWeightKg = parseFloat(String(sourceQuote.cargo_weight || 0));
+  const histWeightKg = parseFloat(String(historicalQuote.cargo_weight || 0));
+  if (sourceWeightKg > 0 && histWeightKg > 0) {
+    const maxWeight = Math.max(sourceWeightKg, histWeightKg);
+    const weightPercentDiff = Math.abs(sourceWeightKg - histWeightKg) / maxWeight;
+    // Score based on percentage difference: 0-15% = 1.0, 15-30% = 0.7, 30-50% = 0.4, >50% = 0.1
+    criteria.cargo_weight_actual = weightPercentDiff <= 0.15 ? 1.0 :
+                                   weightPercentDiff <= 0.30 ? 0.7 :
+                                   weightPercentDiff <= 0.50 ? 0.4 : 0.1;
+  } else {
+    criteria.cargo_weight_actual = 0.3; // Low score for unknown weights
+  }
+  totalScore += (criteria.cargo_weight_actual || 0) * ENHANCED_WEIGHTS.cargo_weight_actual!;
+  totalWeight += ENHANCED_WEIGHTS.cargo_weight_actual!;
+
+  // Equipment Type Matching
+  const sourceEquipment = detectEquipmentType(
+    sourceQuote.cargo_description,
+    sourceQuote.service_type,
+    sourceQuote.equipment_type_requested
+  );
+  const histEquipment = detectEquipmentType(
+    historicalQuote.cargo_description,
+    historicalQuote.service_type,
+    historicalQuote.equipment_type_requested
+  );
+  // Equipment compatibility groups
+  const EQUIPMENT_COMPATIBLE: Record<string, string[]> = {
+    'DRY_VAN': ['DRY_VAN', 'CONESTOGA'],
+    'FLATBED': ['FLATBED', 'STEP_DECK', 'CONESTOGA'],
+    'STEP_DECK': ['STEP_DECK', 'FLATBED', 'LOWBOY'],
+    'LOWBOY': ['LOWBOY', 'STEP_DECK'],
+    'REEFER': ['REEFER'],
+    'TANKER': ['TANKER'],
+    'HOTSHOT': ['HOTSHOT', 'FLATBED'],
+  };
+  const equipmentCompat = EQUIPMENT_COMPATIBLE[sourceEquipment] || [sourceEquipment];
+  criteria.equipment_type = sourceEquipment === histEquipment ? 1.0 :
+                            equipmentCompat.includes(histEquipment) ? 0.6 : 0.1;
+  totalScore += (criteria.equipment_type || 0) * ENHANCED_WEIGHTS.equipment_type!;
+  totalWeight += ENHANCED_WEIGHTS.equipment_type!;
 
   // Piece Count
   const sourcePieces = parseInt(String(sourceQuote.number_of_pieces)) || 0;
@@ -600,17 +1018,17 @@ function calculateEnhancedSimilarity(
   totalScore += (criteria.container_type || 0) * ENHANCED_WEIGHTS.container_type!;
   totalWeight += ENHANCED_WEIGHTS.container_type!;
 
-  // Recency - less aggressive decay so 6-month old quotes still score well
-  // New: half-life of 120 days (was 60), so 120-day old quotes score 0.5
-  // This means 6-month old quotes score ~0.35 instead of ~0.12
+  // Recency - shipping rates change frequently (fuel, market conditions)
+  // Use 75-day half-life so older quotes are appropriately discounted
+  // This means: 75 days = 0.5, 150 days = 0.25, 6 months = ~0.18
   const quoteDate = historicalQuote.quote_date || historicalQuote.created_at;
   if (quoteDate) {
     const ageDays = (Date.now() - new Date(quoteDate).getTime()) / (1000 * 60 * 60 * 24);
-    // Less aggressive decay: half-life of 120 days
-    // 0 days = 1.0, 60 days = 0.71, 120 days = 0.5, 180 days = 0.35, 360 days = 0.12
-    criteria.recency = Math.max(0.1, Math.pow(0.5, ageDays / 120));
+    // 75-day half-life: market rates can shift significantly in 2-3 months
+    // 0 days = 1.0, 30 days = 0.76, 75 days = 0.5, 150 days = 0.25, 225 days = 0.125
+    criteria.recency = Math.max(0.05, Math.pow(0.5, ageDays / 75));
   } else {
-    criteria.recency = 0.4; // Slightly lower default for unknown dates
+    criteria.recency = 0.25; // Low default for unknown dates - risky to trust
   }
 
   totalScore += (criteria.recency || 0) * ENHANCED_WEIGHTS.recency!;
@@ -630,14 +1048,12 @@ function calculateEnhancedSimilarity(
   // Penalize long-haul ground freight matches that have poor distance or cargo similarity
   const isLongHaulGround = sourceService === 'GROUND' && (sourceDistance ?? 0) > 500;
   if (isLongHaulGround) {
-    if (criteria.distance_similarity < 0.85) {
+    if (criteria.distance_similarity !== undefined && criteria.distance_similarity < 0.85) {
         finalScore *= 0.8; // 20% penalty for poor distance match
-        // @ts-ignore
         criteria.long_haul_penalty_distance = 0.2;
     }
-    if (criteria.cargo_category < 1.0) {
+    if (criteria.cargo_category !== undefined && criteria.cargo_category < 1.0) {
         finalScore *= 0.85; // 15% penalty for non-exact cargo match
-        // @ts-ignore
         criteria.long_haul_penalty_cargo = 0.15;
     }
   }
@@ -646,7 +1062,6 @@ function calculateEnhancedSimilarity(
   // These have completely different pricing models and should rarely match
   if (laneTypeMismatch) {
     finalScore *= 0.5; // 50% penalty for lane type mismatch
-    // @ts-ignore
     criteria.lane_type_mismatch_penalty = 0.5;
   }
 
@@ -730,6 +1145,377 @@ interface MatchingOptions {
   maxMatches?: number;
   useAI?: boolean;
   feedbackData?: Map<number, QuoteFeedbackData>;
+  skipValidation?: boolean; // Set true to skip quality filters (for debugging)
+}
+
+// Price bounds for sanity checking - quotes outside these ranges are likely errors
+const PRICE_SANITY_BOUNDS = {
+  MIN_PRICE: 50,           // Minimum realistic shipping quote
+  MAX_PRICE: 1000000,      // Maximum realistic quote (even for project cargo)
+  // Per-mile sanity checks (helps catch data entry errors)
+  MIN_PRICE_PER_MILE: 0.50,   // Below this is likely an error or partial quote
+  MAX_PRICE_PER_MILE: 100,    // Above this is likely an error (unless air/specialized)
+};
+
+/**
+ * Validate a historical quote for quality and data sanity
+ * Returns null if quote should be excluded, or the quote with warnings if acceptable
+ */
+interface QuoteValidationResult {
+  valid: boolean;
+  quote: Quote;
+  warnings: string[];
+  qualityScore: number; // 0-1, used to weight matches
+}
+
+function validateHistoricalQuote(quote: Quote): QuoteValidationResult {
+  const warnings: string[] = [];
+  let qualityScore = 1.0;
+
+  const price = quote.final_agreed_price || quote.initial_quote_amount;
+
+  // Check 1: Must have a price
+  if (!price || price <= 0) {
+    return { valid: false, quote, warnings: ['No valid price'], qualityScore: 0 };
+  }
+
+  // Check 2: Price sanity bounds
+  if (price < PRICE_SANITY_BOUNDS.MIN_PRICE) {
+    return { valid: false, quote, warnings: [`Price $${price} below minimum threshold`], qualityScore: 0 };
+  }
+  if (price > PRICE_SANITY_BOUNDS.MAX_PRICE) {
+    return { valid: false, quote, warnings: [`Price $${price} above maximum threshold`], qualityScore: 0 };
+  }
+
+  // Check 3: Price per mile sanity (if distance available)
+  const distanceMiles = quote.total_distance_miles;
+  if (distanceMiles && distanceMiles > 0) {
+    const pricePerMile = price / distanceMiles;
+
+    // Extremely low price per mile - likely partial quote or data error
+    if (pricePerMile < PRICE_SANITY_BOUNDS.MIN_PRICE_PER_MILE && distanceMiles > 50) {
+      warnings.push(`Low price/mile: $${pricePerMile.toFixed(2)}/mi`);
+      qualityScore *= 0.5; // Reduce but don't reject
+    }
+
+    // Extremely high price per mile (unless it's air freight or specialized)
+    const serviceType = normalizeServiceType(quote.service_type);
+    if (pricePerMile > PRICE_SANITY_BOUNDS.MAX_PRICE_PER_MILE &&
+        serviceType !== 'AIR' && distanceMiles > 20) {
+      warnings.push(`High price/mile: $${pricePerMile.toFixed(2)}/mi`);
+      qualityScore *= 0.6;
+    }
+  }
+
+  // Check 4: Must have origin and destination
+  if (!quote.origin_city && !quote.origin_country) {
+    warnings.push('Missing origin location');
+    qualityScore *= 0.7;
+  }
+  if (!quote.destination_city && !quote.destination_country) {
+    warnings.push('Missing destination location');
+    qualityScore *= 0.7;
+  }
+
+  // Check 5: Quote age - very old quotes get reduced quality
+  const quoteDate = quote.quote_date || quote.created_at;
+  if (quoteDate) {
+    const ageDays = (Date.now() - new Date(quoteDate).getTime()) / (1000 * 60 * 60 * 24);
+    if (ageDays > 365) {
+      warnings.push(`Quote is ${Math.round(ageDays)} days old`);
+      qualityScore *= 0.6;
+    } else if (ageDays > 180) {
+      qualityScore *= 0.8;
+    }
+  } else {
+    warnings.push('Missing quote date');
+    qualityScore *= 0.7;
+  }
+
+  // Check 6: Prefer quotes with final_agreed_price (actual won business)
+  if (quote.final_agreed_price && quote.job_won) {
+    qualityScore *= 1.15; // Boost for verified pricing
+    qualityScore = Math.min(1.0, qualityScore); // Cap at 1.0
+  }
+
+  // Check 7: Service type should be identifiable
+  const serviceType = normalizeServiceType(quote.service_type);
+  if (serviceType === 'UNKNOWN') {
+    warnings.push('Unknown service type');
+    qualityScore *= 0.8;
+  }
+
+  return {
+    valid: qualityScore >= 0.3, // Reject if quality drops below 30%
+    quote,
+    warnings,
+    qualityScore: Math.max(0, Math.min(1, qualityScore)),
+  };
+}
+
+/**
+ * Filter and validate historical quotes before matching
+ * Returns only quotes that pass quality checks
+ */
+function filterHistoricalQuotes(quotes: Quote[], verbose: boolean = false): Quote[] {
+  const validQuotes: Quote[] = [];
+  let rejectedCount = 0;
+  const rejectionReasons: Record<string, number> = {};
+
+  for (const quote of quotes) {
+    const validation = validateHistoricalQuote(quote);
+
+    if (validation.valid) {
+      validQuotes.push(quote);
+    } else {
+      rejectedCount++;
+      const reason = validation.warnings[0] || 'Unknown';
+      rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
+    }
+  }
+
+  if (verbose && rejectedCount > 0) {
+    console.log(`  Filtered out ${rejectedCount} low-quality historical quotes:`);
+    for (const [reason, count] of Object.entries(rejectionReasons)) {
+      console.log(`    - ${reason}: ${count}`);
+    }
+  }
+
+  return validQuotes;
+}
+
+// =============================================================================
+// OUTLIER DETECTION AND STATISTICAL PRICING
+// =============================================================================
+
+/**
+ * Statistical helper functions
+ */
+function calculateMedian(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1]! + sorted[mid]!) / 2
+    : sorted[mid]!;
+}
+
+function calculateMean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function calculateStdDev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const mean = calculateMean(values);
+  const squaredDiffs = values.map(v => Math.pow(v - mean, 2));
+  return Math.sqrt(squaredDiffs.reduce((sum, v) => sum + v, 0) / (values.length - 1));
+}
+
+function calculatePercentile(values: number[], percentile: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = (percentile / 100) * (sorted.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sorted[lower]!;
+  return sorted[lower]! + (sorted[upper]! - sorted[lower]!) * (index - lower);
+}
+
+/**
+ * Detect and remove price outliers using IQR method
+ * Returns filtered matches with outliers removed
+ */
+interface OutlierDetectionResult {
+  filteredMatches: ExtendedQuoteMatch[];
+  outliers: ExtendedQuoteMatch[];
+  stats: {
+    originalCount: number;
+    outlierCount: number;
+    q1: number;
+    q3: number;
+    iqr: number;
+    lowerBound: number;
+    upperBound: number;
+  };
+}
+
+function detectAndRemoveOutliers(
+  matches: ExtendedQuoteMatch[],
+  iqrMultiplier: number = 1.5
+): OutlierDetectionResult {
+  const prices = matches
+    .map(m => m.suggested_price)
+    .filter((p): p is number => typeof p === 'number' && p > 0);
+
+  if (prices.length < 4) {
+    // Not enough data for IQR-based outlier detection
+    return {
+      filteredMatches: matches,
+      outliers: [],
+      stats: {
+        originalCount: matches.length,
+        outlierCount: 0,
+        q1: 0,
+        q3: 0,
+        iqr: 0,
+        lowerBound: 0,
+        upperBound: Infinity,
+      },
+    };
+  }
+
+  const q1 = calculatePercentile(prices, 25);
+  const q3 = calculatePercentile(prices, 75);
+  const iqr = q3 - q1;
+  const lowerBound = q1 - iqrMultiplier * iqr;
+  const upperBound = q3 + iqrMultiplier * iqr;
+
+  const filteredMatches: ExtendedQuoteMatch[] = [];
+  const outliers: ExtendedQuoteMatch[] = [];
+
+  for (const match of matches) {
+    const price = match.suggested_price;
+    if (typeof price === 'number' && price > 0) {
+      if (price < lowerBound || price > upperBound) {
+        outliers.push(match);
+      } else {
+        filteredMatches.push(match);
+      }
+    } else {
+      filteredMatches.push(match); // Keep matches without prices
+    }
+  }
+
+  return {
+    filteredMatches,
+    outliers,
+    stats: {
+      originalCount: matches.length,
+      outlierCount: outliers.length,
+      q1,
+      q3,
+      iqr,
+      lowerBound,
+      upperBound,
+    },
+  };
+}
+
+/**
+ * Calculate statistically robust pricing from matches
+ * Uses weighted median and trimmed mean for stability
+ */
+interface StatisticalPricingResult {
+  recommendedPrice: number;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW';
+  priceRange: PriceRange;
+  methodology: string;
+  stats: {
+    matchCount: number;
+    mean: number;
+    median: number;
+    trimmedMean: number;
+    stdDev: number;
+    coeffOfVariation: number;
+  };
+}
+
+function calculateStatisticalPricing(
+  matches: ExtendedQuoteMatch[],
+  sourceQuote: Quote
+): StatisticalPricingResult | null {
+  // Get valid prices weighted by similarity score
+  const pricedMatches = matches.filter(m =>
+    typeof m.suggested_price === 'number' && m.suggested_price > 0
+  );
+
+  if (pricedMatches.length === 0) {
+    return null;
+  }
+
+  const prices = pricedMatches.map(m => m.suggested_price!);
+  const scores = pricedMatches.map(m => m.similarity_score);
+
+  // Calculate basic statistics
+  const mean = calculateMean(prices);
+  const median = calculateMedian(prices);
+  const stdDev = calculateStdDev(prices);
+  const coeffOfVariation = mean > 0 ? stdDev / mean : 0;
+
+  // Calculate trimmed mean (remove top and bottom 10%)
+  const sortedPrices = [...prices].sort((a, b) => a - b);
+  const trimCount = Math.max(1, Math.floor(sortedPrices.length * 0.1));
+  const trimmedPrices = sortedPrices.slice(trimCount, -trimCount || undefined);
+  const trimmedMean = trimmedPrices.length > 0 ? calculateMean(trimmedPrices) : mean;
+
+  // Calculate weighted average (by similarity score)
+  const totalWeight = scores.reduce((sum, s) => sum + s, 0);
+  const weightedAvg = totalWeight > 0
+    ? pricedMatches.reduce((sum, m) => sum + m.suggested_price! * m.similarity_score, 0) / totalWeight
+    : mean;
+
+  // Determine confidence based on data quality
+  let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW';
+  let methodology: string;
+
+  if (pricedMatches.length >= 5 && coeffOfVariation < 0.20 && scores[0]! >= 0.75) {
+    confidence = 'HIGH';
+    methodology = 'Weighted average of 5+ consistent matches with high similarity';
+  } else if (pricedMatches.length >= 3 && coeffOfVariation < 0.35 && scores[0]! >= 0.60) {
+    confidence = 'MEDIUM';
+    methodology = 'Weighted average with moderate consistency';
+  } else if (pricedMatches.length >= 1 && scores[0]! >= 0.55) {
+    confidence = 'LOW';
+    methodology = 'Limited matches or high price variance';
+  } else {
+    confidence = 'VERY_LOW';
+    methodology = 'Insufficient data quality for reliable pricing';
+  }
+
+  // Choose recommended price based on confidence
+  let recommendedPrice: number;
+  if (confidence === 'HIGH') {
+    // High confidence: use weighted average
+    recommendedPrice = weightedAvg;
+  } else if (confidence === 'MEDIUM') {
+    // Medium confidence: blend weighted average with median for stability
+    recommendedPrice = (weightedAvg * 0.6 + median * 0.4);
+  } else {
+    // Low confidence: prefer median (more robust to outliers)
+    recommendedPrice = (median * 0.7 + trimmedMean * 0.3);
+  }
+
+  // Calculate price range based on data spread
+  const rangeMultiplier = confidence === 'HIGH' ? 0.10 :
+                          confidence === 'MEDIUM' ? 0.15 :
+                          confidence === 'LOW' ? 0.20 : 0.25;
+
+  const priceRange: PriceRange = {
+    low: Math.round(recommendedPrice * (1 - rangeMultiplier)),
+    high: Math.round(recommendedPrice * (1 + rangeMultiplier)),
+  };
+
+  // If we have actual percentile data, use that for range
+  if (prices.length >= 4) {
+    priceRange.low = Math.round(Math.max(priceRange.low, calculatePercentile(prices, 15)));
+    priceRange.high = Math.round(Math.min(priceRange.high, calculatePercentile(prices, 85)));
+  }
+
+  return {
+    recommendedPrice: Math.round(recommendedPrice),
+    confidence,
+    priceRange,
+    methodology,
+    stats: {
+      matchCount: pricedMatches.length,
+      mean: Math.round(mean),
+      median: Math.round(median),
+      trimmedMean: Math.round(trimmedMean),
+      stdDev: Math.round(stdDev),
+      coeffOfVariation: Math.round(coeffOfVariation * 100) / 100,
+    },
+  };
 }
 
 // Feedback boost constants
@@ -793,21 +1579,29 @@ function findEnhancedMatches(
   options: MatchingOptions = {},
   sourceDistance?: number | null
 ): ExtendedQuoteMatch[] {
-  const { minScore = 0.45, maxMatches = 10, feedbackData } = options;
+  const { minScore = 0.55, maxMatches = 10, feedbackData, skipValidation = false } = options;
 
-  // Per-service minimum similarity thresholds to reduce weak/biased matches
+  // Per-service minimum similarity thresholds - raised for more realistic matches
+  // A 0.55 match means only 55% confidence - pricing from such matches is unreliable
   const SERVICE_MIN_SCORE: Record<string, number> = {
-    DRAYAGE: 0.55,
-    OCEAN: 0.50,
-    INTERMODAL: 0.50,
-    GROUND: 0.45,
+    DRAYAGE: 0.60,    // Drayage is very distance/location sensitive
+    OCEAN: 0.58,      // Ocean has distinct pricing tiers
+    INTERMODAL: 0.58, // Intermodal combines multiple modes
+    GROUND: 0.55,     // Ground has more flexibility but still needs good match
+    AIR: 0.60,        // Air freight has premium pricing - need good match
+    TRANSLOAD: 0.55,  // Transload pricing varies by facility
   };
   const normalizedService = normalizeServiceType(sourceQuote.service_type);
   const effectiveMinScore = Math.max(minScore, SERVICE_MIN_SCORE[normalizedService] ?? minScore);
 
+  // Apply quality filters to historical quotes unless skipped
+  const filteredHistorical = skipValidation
+    ? historicalQuotes
+    : filterHistoricalQuotes(historicalQuotes, false);
+
   const matches: ExtendedQuoteMatch[] = [];
 
-  for (const historical of historicalQuotes) {
+  for (const historical of filteredHistorical) {
     if (historical.quote_id === sourceQuote.quote_id) continue;
 
     // Use provided source distance, historical quotes use their stored total_distance_miles
@@ -915,7 +1709,34 @@ async function getAIPricingRecommendation(
       return null;
     };
 
-    const parseAiInitialAmount = (text: string): { amount: number | null; error?: string } => {
+    // Extended AI response parsing to capture all pricing details
+    interface ParsedAIResponse {
+      amount: number | null;
+      error?: string;
+      fullResponse?: {
+        recommended_quote?: {
+          initial_amount?: number;
+          floor_price?: number;
+          target_price?: number;
+          stretch_price?: number;
+        };
+        confidence?: string;
+        price_breakdown?: {
+          linehaul?: number;
+          fuel_surcharge?: number;
+          accessorials?: number;
+          port_fees?: number;
+          handling?: number;
+          margin?: number;
+        };
+        market_factors?: string[];
+        negotiation_notes?: string;
+        alternative_options?: Array<{ description?: string; price?: number; savings_percent?: number }>;
+        expiration_recommendation?: string;
+      };
+    }
+
+    const parseAiFullResponse = (text: string): ParsedAIResponse => {
       const jsonCandidate = extractJsonObject(text);
       if (!jsonCandidate) {
         const trimmed = (text || '').trim();
@@ -937,31 +1758,127 @@ async function getAIPricingRecommendation(
         if (!Number.isFinite(amount) || amount <= 0) {
           return { amount: null, error: 'Invalid recommended_quote.initial_amount' };
         }
-        return { amount };
+        return { amount, fullResponse: parsed };
       } catch (e) {
         return { amount: null, error: (e as Error).message };
       }
     };
 
+    // Build comprehensive business-friendly reasoning from AI response
+    const buildAIReasoning = (
+      aiResponse: ParsedAIResponse['fullResponse'],
+      algorithmicReasoning?: string
+    ): string => {
+      const sections: string[] = [];
+
+      // Price Range section - most important for sales
+      const quote = aiResponse?.recommended_quote;
+      if (quote) {
+        const priceRange: string[] = [];
+        if (quote.floor_price) priceRange.push(`$${quote.floor_price.toLocaleString()} (minimum)`);
+        if (quote.target_price) priceRange.push(`$${quote.target_price.toLocaleString()} (target)`);
+        if (quote.stretch_price) priceRange.push(`$${quote.stretch_price.toLocaleString()} (initial ask)`);
+        if (priceRange.length > 0) {
+          sections.push(`PRICE RANGE: ${priceRange.join(' → ')}`);
+        }
+      }
+
+      // Cost Breakdown section - transparent pricing components
+      const breakdown = aiResponse?.price_breakdown;
+      if (breakdown) {
+        const costs: string[] = [];
+        if (breakdown.linehaul) costs.push(`Base freight $${breakdown.linehaul.toLocaleString()}`);
+        if (breakdown.fuel_surcharge) costs.push(`Fuel $${breakdown.fuel_surcharge.toLocaleString()}`);
+        if (breakdown.accessorials) costs.push(`Accessorials $${breakdown.accessorials.toLocaleString()}`);
+        if (breakdown.port_fees) costs.push(`Port fees $${breakdown.port_fees.toLocaleString()}`);
+        if (breakdown.handling) costs.push(`Handling $${breakdown.handling.toLocaleString()}`);
+        if (costs.length > 0) {
+          sections.push(`COST BREAKDOWN: ${costs.join(' + ')}`);
+        }
+        // Margin as separate line for clarity
+        if (breakdown.margin) {
+          const marginPercent = quote?.target_price
+            ? Math.round((breakdown.margin / quote.target_price) * 100)
+            : null;
+          sections.push(`MARGIN: $${breakdown.margin.toLocaleString()}${marginPercent ? ` (${marginPercent}% of target)` : ''}`);
+        }
+      }
+
+      // Negotiation guidance - actionable sales advice
+      if (aiResponse?.negotiation_notes) {
+        sections.push(`NEGOTIATION: ${aiResponse.negotiation_notes}`);
+      }
+
+      // Market considerations - context for pricing decisions
+      if (aiResponse?.market_factors && aiResponse.market_factors.length > 0) {
+        const numberedFactors = aiResponse.market_factors
+          .slice(0, 4)
+          .map((f, i) => `${i + 1}. ${f}`)
+          .join(' ');
+        sections.push(`MARKET CONSIDERATIONS: ${numberedFactors}`);
+      }
+
+      // Alternative options - give customer choices
+      if (aiResponse?.alternative_options && aiResponse.alternative_options.length > 0) {
+        const alts = aiResponse.alternative_options
+          .filter(a => a.description && a.price)
+          .map(a => `${a.description}: $${a.price?.toLocaleString()}${a.savings_percent ? ` (save ${a.savings_percent}%)` : ''}`)
+          .slice(0, 3);
+        if (alts.length > 0) {
+          sections.push(`ALTERNATIVE OPTIONS: ${alts.join('; ')}`);
+        }
+      }
+
+      // Quote validity
+      if (aiResponse?.expiration_recommendation) {
+        sections.push(`VALIDITY: ${aiResponse.expiration_recommendation}`);
+      }
+
+      // Data source context (condensed algorithmic info)
+      if (algorithmicReasoning) {
+        // Extract key metrics from algorithmic reasoning for context
+        const matchInfo = algorithmicReasoning.match(/(\d+)%?\s*similar/i);
+        const priceInfo = algorithmicReasoning.match(/\$[\d,]+/g);
+        if (matchInfo || priceInfo) {
+          const dataPoints: string[] = [];
+          if (matchInfo) dataPoints.push(`Best historical match: ${matchInfo[1]}% similar`);
+          if (priceInfo && priceInfo.length > 0) dataPoints.push(`Reference prices: ${priceInfo.slice(0, 3).join(', ')}`);
+          sections.push(`DATA SOURCE: ${dataPoints.join('. ')}`);
+        }
+      }
+
+      // Confidence indicator
+      if (aiResponse?.confidence) {
+        const confidenceText = aiResponse.confidence === 'HIGH'
+          ? 'High confidence - strong historical data support'
+          : aiResponse.confidence === 'MEDIUM'
+            ? 'Medium confidence - reasonable market comparables'
+            : 'Low confidence - limited data, recommend additional market validation';
+        sections.push(`CONFIDENCE: ${confidenceText}`);
+      }
+
+      return sections.join('\n\n');
+    };
+
     // Try to get AI-enhanced recommendation
     try {
-      const aiResponse = await aiService.generateResponse(pricingPrompt, {
+      const aiResponseText = await aiService.generateResponse(pricingPrompt, {
         temperature: 0.2,
         topP: 0.9,
         maxOutputTokens: 4096,
         responseMimeType: 'application/json',
       });
 
-      // Parse the AI response - it may return structured recommendations
-      if (!aiResponse || !aiResponse.trim()) {
+      // Parse the AI response - capture full response for comprehensive reasoning
+      if (!aiResponseText || !aiResponseText.trim()) {
         console.log('      -> AI returned an empty response; falling back to algorithmic pricing');
       } else {
-        let parsedAmount = parseAiInitialAmount(aiResponse);
+        let parsedResult = parseAiFullResponse(aiResponseText);
 
         // If parsing fails, do one repair attempt asking for JSON only.
-        if (!parsedAmount.amount) {
-          console.log(`      -> AI response parsing failed: ${parsedAmount.error || 'unknown error'}`);
-          const truncated = aiResponse.length > 3000 ? aiResponse.slice(-3000) : aiResponse;
+        if (!parsedResult.amount) {
+          console.log(`      -> AI response parsing failed: ${parsedResult.error || 'unknown error'}`);
+          const truncated = aiResponseText.length > 3000 ? aiResponseText.slice(-3000) : aiResponseText;
           const repairPrompt = `${pricingPrompt}
 
 IMPORTANT: Your previous response was not valid JSON or did not include recommended_quote.initial_amount.
@@ -977,13 +1894,15 @@ ${truncated}`;
               maxOutputTokens: 4096,
               responseMimeType: 'application/json',
             });
-            parsedAmount = repaired ? parseAiInitialAmount(repaired) : { amount: null, error: 'Empty repair response' };
+            parsedResult = repaired ? parseAiFullResponse(repaired) : { amount: null, error: 'Empty repair response' };
           } catch (repairErr) {
             console.log(`      -> AI JSON repair attempt failed: ${(repairErr as Error).message}`);
           }
         }
 
-        const aiSuggestedPrice = parsedAmount.amount;
+        const aiSuggestedPrice = parsedResult.amount;
+        const aiFullResponse = parsedResult.fullResponse;
+
         if (aiSuggestedPrice && algorithmicRecommendation?.recommended_price) {
           const floor = algorithmicRecommendation.floor_price ?? null;
           const ceiling = algorithmicRecommendation.ceiling_price ?? null;
@@ -1017,26 +1936,59 @@ ${truncated}`;
           }
 
           let blendedPrice: number;
+          let blendMethod: string;
           if (algorithmicRecommendation.confidence === 'LOW') {
             if (useHeavyAiForLowConfidenceProjectCargo) {
               console.log(`      -> Project Cargo Override activated for ${sourceCargoCat}`);
               blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.25) + (guardedAi * 0.75));
+              blendMethod = 'Project Cargo Override (25/75 algo/AI)';
             } else {
               console.log(`      -> Low Confidence blend (70/30) activated.`);
               blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.70) + (guardedAi * 0.30));
+              blendMethod = 'Low Confidence blend (70/30 algo/AI)';
             }
           } else {
             blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.85) + (guardedAi * 0.15));
+            blendMethod = 'Standard blend (85/15 algo/AI)';
           }
 
           console.log(
             `    AI-enhanced pricing: Algorithmic $${algorithmicRecommendation.recommended_price.toLocaleString()}, AI suggested $${aiSuggestedPrice.toLocaleString()}, Guarded $${guardedAi.toLocaleString()}, Blended $${blendedPrice.toLocaleString()}`
           );
 
+          // Build comprehensive reasoning from AI response
+          const comprehensiveReasoning = buildAIReasoning(aiFullResponse, algorithmicRecommendation.reasoning);
+
+          // Extract additional pricing details from AI response
+          const aiQuote = aiFullResponse?.recommended_quote;
+          const aiBreakdown = aiFullResponse?.price_breakdown;
+
           return {
             ...algorithmicRecommendation,
             recommended_price: blendedPrice,
-            reasoning: `${algorithmicRecommendation.reasoning} AI-adjusted (JSON-parsed, repair-retried, guardrailed) using centralized pricing prompt.`,
+            // Use AI's floor/target/ceiling if available, otherwise keep algorithmic
+            floor_price: aiQuote?.floor_price ?? algorithmicRecommendation.floor_price,
+            target_price: aiQuote?.target_price ?? algorithmicRecommendation.target_price,
+            ceiling_price: aiQuote?.stretch_price ?? algorithmicRecommendation.ceiling_price,
+            // Use AI confidence if available
+            confidence: (aiFullResponse?.confidence as 'HIGH' | 'MEDIUM' | 'LOW') ?? algorithmicRecommendation.confidence,
+            // Comprehensive reasoning with all AI details
+            reasoning: `${comprehensiveReasoning} | [Blend] ${blendMethod}: Algo $${algorithmicRecommendation.recommended_price.toLocaleString()} + AI $${aiSuggestedPrice.toLocaleString()} → $${blendedPrice.toLocaleString()}`,
+            // Include price breakdown if available
+            price_breakdown: aiBreakdown ? {
+              linehaul: aiBreakdown.linehaul,
+              fuel_surcharge: aiBreakdown.fuel_surcharge,
+              accessorials: aiBreakdown.accessorials,
+              port_fees: aiBreakdown.port_fees,
+              handling: aiBreakdown.handling,
+              margin: aiBreakdown.margin,
+            } : algorithmicRecommendation.price_breakdown,
+            // Include market factors if available
+            market_factors: aiFullResponse?.market_factors ?? algorithmicRecommendation.market_factors,
+            // Include negotiation room if we have margin info
+            negotiation_room_percent: aiBreakdown?.margin && blendedPrice
+              ? Math.round((aiBreakdown.margin / blendedPrice) * 100)
+              : algorithmicRecommendation.negotiation_room_percent,
           };
         }
       }
@@ -1113,19 +2065,53 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
           console.log(`    Distance: ${routeDistance.distanceMiles} miles (${routeDistance.durationText})`);
         }
 
-        const matches = findEnhancedMatches(sourceQuote, historicalQuotes, { minScore, maxMatches, feedbackData }, sourceDistanceMiles);
+        let matches = findEnhancedMatches(sourceQuote, historicalQuotes, { minScore, maxMatches, feedbackData }, sourceDistanceMiles);
+
+        // Apply outlier detection to remove price anomalies
+        if (matches.length >= 4) {
+          const outlierResult = detectAndRemoveOutliers(matches);
+          if (outlierResult.outliers.length > 0) {
+            console.log(`    Removed ${outlierResult.outliers.length} price outliers (IQR bounds: $${outlierResult.stats.lowerBound.toFixed(0)}-$${outlierResult.stats.upperBound.toFixed(0)})`);
+            matches = outlierResult.filteredMatches;
+          }
+        }
+
+        // Always generate pricing - use matches if available, fallback otherwise
+        let aiPricing: AIPricingDetails | null = null;
+        let finalSuggestedPrice: number | null | undefined = null;
+        let finalPriceConfidence: number = 0;
+        let finalPriceRange: PriceRange | null = null;
+        let pricingSource: string = 'none';
 
         if (matches.length > 0) {
-          let aiPricing: AIPricingDetails | null = null;
-          let finalSuggestedPrice = matches[0]?.suggested_price;
-          let finalPriceConfidence = matches[0]?.price_confidence || 0;
+          // Calculate statistical pricing from matches
+          const statPricing = calculateStatisticalPricing(matches, sourceQuote);
 
+          if (statPricing) {
+            finalSuggestedPrice = statPricing.recommendedPrice;
+            finalPriceConfidence = statPricing.confidence === 'HIGH' ? 0.85 :
+                                   statPricing.confidence === 'MEDIUM' ? 0.70 :
+                                   statPricing.confidence === 'LOW' ? 0.55 : 0.40;
+            finalPriceRange = statPricing.priceRange;
+            pricingSource = `statistical (${statPricing.methodology})`;
+            console.log(`    Statistical Price: $${statPricing.recommendedPrice.toLocaleString()} (${statPricing.confidence}, CV: ${statPricing.stats.coeffOfVariation})`);
+          } else {
+            // Fall back to best match price
+            finalSuggestedPrice = matches[0]?.suggested_price;
+            finalPriceConfidence = matches[0]?.price_confidence || 0;
+            finalPriceRange = matches[0]?.price_range || null;
+            pricingSource = 'best_match';
+          }
+
+          // Try AI enhancement if enabled
           if (useAI) {
             aiPricing = await getAIPricingRecommendation(sourceQuote, matches, { useAI }, routeDistance);
             if (aiPricing && aiPricing.recommended_price) {
               finalSuggestedPrice = aiPricing.recommended_price;
               finalPriceConfidence = aiPricing.confidence === 'HIGH' ? 0.9 :
                                      aiPricing.confidence === 'MEDIUM' ? 0.7 : 0.5;
+              finalPriceRange = { low: aiPricing.floor_price!, high: aiPricing.ceiling_price! };
+              pricingSource = 'ai_enhanced';
               console.log(`    AI Price: $${aiPricing.recommended_price.toLocaleString()} (${aiPricing.confidence})`);
 
               // Save AI pricing recommendation to dedicated table
@@ -1140,7 +2126,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
             matchCriteria: m.match_criteria,
             suggestedPrice: idx === 0 ? finalSuggestedPrice : m.suggested_price,
             priceConfidence: idx === 0 ? finalPriceConfidence : m.price_confidence,
-            algorithmVersion: useAI ? 'v2-ai-enhanced' : 'v2-enhanced',
+            algorithmVersion: useAI ? 'v3-statistical-ai' : 'v3-statistical',
             aiPricingDetails: idx === 0 && aiPricing ? {
               recommended_price: aiPricing.recommended_price,
               floor_price: aiPricing.floor_price,
@@ -1154,7 +2140,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
           await db.createQuoteMatchesBulk(matchesToInsert);
           results.matchesCreated += matches.length;
 
-          console.log(`    Found ${matches.length} matches`);
+          console.log(`    Found ${matches.length} matches (source: ${pricingSource})`);
           console.log(`    Best match: Score ${matches[0]?.similarity_score.toFixed(2)}, Suggested Price: $${finalSuggestedPrice?.toLocaleString() || 'N/A'}`);
 
           results.matchDetails.push({
@@ -1162,11 +2148,40 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
             matchCount: matches.length,
             bestScore: matches[0]?.similarity_score || 0,
             suggestedPrice: finalSuggestedPrice,
-            priceRange: aiPricing ? { low: aiPricing.floor_price!, high: aiPricing.ceiling_price! } : matches[0]?.price_range,
+            priceRange: finalPriceRange,
             aiPricing: aiPricing || undefined,
           });
         } else {
-          console.log(`    No matches found (minScore: ${minScore})`);
+          // NO MATCHES FOUND - Apply fallback pricing
+          console.log(`    No matches found (minScore: ${minScore}) - applying fallback pricing`);
+
+          const fallbackPricing = calculateFallbackPricing(sourceQuote, sourceDistanceMiles);
+          finalSuggestedPrice = fallbackPricing.price;
+          finalPriceConfidence = fallbackPricing.confidence === 'LOW' ? 0.35 : 0.25;
+          finalPriceRange = fallbackPricing.priceRange;
+          pricingSource = 'fallback';
+
+          console.log(`    Fallback Price: $${fallbackPricing.price.toLocaleString()} (${fallbackPricing.confidence})`);
+          console.log(`    Breakdown: ${fallbackPricing.reasoning}`);
+
+          // Create a synthetic match detail for the fallback pricing
+          // Map VERY_LOW to LOW for AIPricingDetails type compatibility
+          const mappedConfidence: 'HIGH' | 'MEDIUM' | 'LOW' = fallbackPricing.confidence === 'VERY_LOW' ? 'LOW' : 'LOW';
+          results.matchDetails.push({
+            quoteId,
+            matchCount: 0,
+            bestScore: 0,
+            suggestedPrice: finalSuggestedPrice,
+            priceRange: finalPriceRange,
+            aiPricing: {
+              recommended_price: fallbackPricing.price,
+              floor_price: fallbackPricing.priceRange.low,
+              target_price: fallbackPricing.price,
+              ceiling_price: fallbackPricing.priceRange.high,
+              confidence: mappedConfidence,
+              reasoning: `[FALLBACK] ${fallbackPricing.reasoning}`,
+            },
+          });
         }
 
         results.processed++;
@@ -1791,28 +2806,61 @@ async function recordPricingOutcome(quoteId: number, outcome: PricingOutcome): P
 }
 
 export {
+  // Main processing functions
   processEnhancedMatches,
   findEnhancedMatches,
   calculateEnhancedSimilarity,
   suggestPriceEnhanced,
   getAIPricingRecommendation,
+
+  // Normalization and classification
   normalizeServiceType,
   classifyCargo,
   getWeightRange,
   getUSRegion,
   getIntlRegion,
+  detectContainerType,
+  detectEquipmentType,
+  isOOGCargo,
+
+  // Pricing functions
+  calculateFallbackPricing,
+  calculateStatisticalPricing,
+  getContainerPricingMultiplier,
+  suggestPriceWithFeedback,
+  generatePricingPrompt,
+  recordPricingOutcome,
+
+  // Validation and filtering
+  validateHistoricalQuote,
+  filterHistoricalQuotes,
+  detectAndRemoveOutliers,
+
+  // Similarity calculations
+  calculateCityMatchScore,
+  calculateDistanceSimilarity,
+  calculateQuoteDistance,
+  getDistanceCategory,
+
+  // Learning and feedback
+  getLearnedWeights,
+  learnFromFeedback,
+
+  // Statistical helpers
+  calculateMedian,
+  calculateMean,
+  calculateStdDev,
+  calculatePercentile,
+
+  // Constants
   ENHANCED_WEIGHTS,
   SERVICE_TYPE_MAPPING,
   CARGO_CATEGORIES,
   CONTAINER_PRICING_MULTIPLIERS,
-  detectContainerType,
-  isOOGCargo,
-  getContainerPricingMultiplier,
-  getLearnedWeights,
-  learnFromFeedback,
-  suggestPriceWithFeedback,
-  generatePricingPrompt,
-  recordPricingOutcome,
-  getDistanceCategory,
-  calculateQuoteDistance,
+  PRICE_SANITY_BOUNDS,
+  BASE_RATES_PER_MILE,
+  MINIMUM_CHARGES,
+  REGIONAL_MULTIPLIERS,
+  CARGO_MULTIPLIERS,
+  EQUIPMENT_RATES,
 };

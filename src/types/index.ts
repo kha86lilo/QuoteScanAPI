@@ -377,11 +377,17 @@ export interface MatchCriteria {
   service_compatibility?: number;
   cargo_category?: number;
   cargo_weight_range?: number;
+  cargo_weight_actual?: number;    // Granular weight comparison
   number_of_pieces?: number;
   hazmat?: number;
   container_type?: number;
+  equipment_type?: number;         // Equipment type matching
   recency?: number;
   distance_similarity?: number;
+  // Penalty flags (applied post-calculation)
+  long_haul_penalty_distance?: number;
+  long_haul_penalty_cargo?: number;
+  lane_type_mismatch_penalty?: number;
 }
 
 export interface MatchedQuoteData {
