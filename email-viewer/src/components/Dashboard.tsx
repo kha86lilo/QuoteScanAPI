@@ -23,6 +23,7 @@ import {
   TrendingUp,
   Filter,
   MessageSquare,
+  Loader2,
 } from 'lucide-react';
 import {
   DashboardEmail,
@@ -548,28 +549,31 @@ function Pagination({
   totalPages,
   totalCount,
   onPageChange,
+  isLoading = false,
 }: {
   currentPage: number;
   totalPages: number;
   totalCount: number;
   onPageChange: (page: number) => void;
+  isLoading?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between px-4 py-2 bg-white border-t border-gray-200">
-      <div className="text-xs text-gray-500">
-        Page {currentPage} of {totalPages} ({totalCount.toLocaleString()} emails)
+      <div className="text-xs text-gray-500 flex items-center gap-2">
+        {isLoading && <Loader2 className="w-3 h-3 animate-spin text-outlook-blue" />}
+        <span>Page {currentPage} of {totalPages} ({totalCount.toLocaleString()} emails)</span>
       </div>
       <div className="flex items-center gap-1">
         <button
           onClick={() => onPageChange(1)}
-          disabled={currentPage <= 1}
+          disabled={currentPage <= 1 || isLoading}
           className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ChevronsLeft className="w-4 h-4" />
         </button>
         <button
           onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage <= 1}
+          disabled={currentPage <= 1 || isLoading}
           className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -590,11 +594,12 @@ function Pagination({
               <button
                 key={pageNum}
                 onClick={() => onPageChange(pageNum)}
+                disabled={isLoading}
                 className={`w-7 h-7 text-xs rounded ${
                   pageNum === currentPage
                     ? 'bg-outlook-blue text-white'
                     : 'hover:bg-gray-100 text-gray-600'
-                }`}
+                } disabled:cursor-not-allowed`}
               >
                 {pageNum}
               </button>
@@ -603,14 +608,14 @@ function Pagination({
         </div>
         <button
           onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage >= totalPages}
+          disabled={currentPage >= totalPages || isLoading}
           className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ChevronRight className="w-4 h-4" />
         </button>
         <button
           onClick={() => onPageChange(totalPages)}
-          disabled={currentPage >= totalPages}
+          disabled={currentPage >= totalPages || isLoading}
           className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ChevronsRight className="w-4 h-4" />
@@ -752,17 +757,13 @@ export default function Dashboard({ isOpen, onClose }: DashboardProps) {
                 <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                     <Mail className="w-4 h-4" />
-                    Emails
-                    {filterWithReplies && (
-                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                        <Filter className="w-3 h-3" />
-                        With Replies Only
-                      </span>
-                    )}
+                    {filterWithReplies ? 'Emails with Staff Replies' : 'Recent Emails'}
                     {isLoading && <span className="text-xs text-gray-400">(loading...)</span>}
                   </h3>
                   <span className="text-xs text-gray-500">
-                    {pagination.totalCount.toLocaleString()} {filterWithReplies ? 'replied' : 'total'}
+                    {filterWithReplies
+                      ? `${pagination.totalCount.toLocaleString()} replied conversations`
+                      : `${pagination.totalCount.toLocaleString()} conversations`}
                   </span>
                 </div>
                 {emails.length === 0 ? (
@@ -785,12 +786,13 @@ export default function Dashboard({ isOpen, onClose }: DashboardProps) {
         </div>
 
         {/* Pagination */}
-        {!isLoading && !error && pagination.totalPages > 1 && (
+        {!error && pagination.totalPages > 1 && (
           <Pagination
             currentPage={pagination.currentPage}
             totalPages={pagination.totalPages}
             totalCount={pagination.totalCount}
             onPageChange={handlePageChange}
+            isLoading={isLoading}
           />
         )}
       </div>

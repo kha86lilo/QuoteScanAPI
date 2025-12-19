@@ -239,10 +239,11 @@ export async function GET(request: NextRequest) {
               EXTRACT(EPOCH FROM (sr.received_date - se.email_received_date)) / 3600 as response_hours
             FROM shipping_emails se
             INNER JOIN staff_replies sr ON (
-              sr.conversation_id = se.conversation_id
-              OR sr.original_email_id = se.email_id
+              (sr.conversation_id IS NOT NULL AND sr.conversation_id = se.conversation_id)
+              OR (sr.original_email_id IS NOT NULL AND sr.original_email_id = se.email_id)
             )
             WHERE sr.received_date > se.email_received_date
+              AND EXTRACT(EPOCH FROM (sr.received_date - se.email_received_date)) > 0
           ) response_times
           GROUP BY range
           ORDER BY
@@ -256,22 +257,42 @@ export async function GET(request: NextRequest) {
         );
         responseTimeDistribution = responseTimeResult.rows;
 
+        // Calculate average response time - find first reply for each email
+        // Join on conversation_id OR original_email_id (either can link reply to email)
         const avgResult = await safeQuery(
           client,
           `SELECT COALESCE(ROUND(AVG(response_minutes)::numeric, 0)::int, 0) as avg
           FROM (
             SELECT
-              EXTRACT(EPOCH FROM (sr.received_date - se.email_received_date)) / 60 as response_minutes
+              se.email_id,
+              EXTRACT(EPOCH FROM (MIN(sr.received_date) - se.email_received_date)) / 60 as response_minutes
             FROM shipping_emails se
-            INNER JOIN staff_replies sr ON (
+            INNER JOIN staff_replies sr ON
               sr.conversation_id = se.conversation_id
-              OR sr.original_email_id = se.email_id
-            )
-            WHERE sr.received_date > se.email_received_date
-              AND EXTRACT(EPOCH FROM (sr.received_date - se.email_received_date)) / 60 < 10080
+            WHERE se.conversation_id IS NOT NULL
+              AND sr.conversation_id IS NOT NULL
+              AND sr.received_date > se.email_received_date
+            GROUP BY se.email_id, se.email_received_date
+            HAVING EXTRACT(EPOCH FROM (MIN(sr.received_date) - se.email_received_date)) / 60 BETWEEN 1 AND 10080
           ) rt`
         );
         avgResponseMinutes = avgResult.rows[0]?.avg || 0;
+
+        // Debug: log the result if still 0
+        if (avgResponseMinutes === 0) {
+          console.log('Avg response debug - query returned:', avgResult.rows[0]);
+          // Try a simpler diagnostic query
+          const debugResult = await safeQuery(
+            client,
+            `SELECT COUNT(*) as matched_pairs
+             FROM shipping_emails se
+             INNER JOIN staff_replies sr ON sr.conversation_id = se.conversation_id
+             WHERE se.conversation_id IS NOT NULL
+               AND sr.conversation_id IS NOT NULL
+               AND sr.received_date > se.email_received_date`
+          );
+          console.log('Avg response debug - matched pairs:', debugResult.rows[0]?.matched_pairs);
+        }
       } catch (e) {
         console.warn('Response time query failed:', e);
       }
@@ -286,48 +307,14 @@ export async function GET(request: NextRequest) {
     let countQuery: string;
     let countQueryParams: unknown[];
 
-    // Build ignored emails filter clause
-    let ignoredEmailFilterClause = '';
-    let ignoredEmailFilterParams: unknown[] = [];
-    if (ignoredEmails.length > 0) {
-      ignoredEmailFilterClause = 'AND LOWER(se.email_sender_email) != ALL($3::text[])';
-      ignoredEmailFilterParams = [ignoredEmails.map((e) => e.toLowerCase())];
-    }
+    // Build ignored emails filter params
+    const ignoredEmailFilterParams: unknown[] = ignoredEmails.length > 0
+      ? [ignoredEmails.map((e) => e.toLowerCase())]
+      : [];
 
     if (filterWithReplies && totalStaffReplies > 0) {
-      // Filter to only show emails with staff replies
-      emailsQuery = `
-        SELECT DISTINCT
-          se.email_id,
-          se.email_message_id,
-          se.conversation_id,
-          se.email_subject,
-          se.email_received_date,
-          se.email_sender_name,
-          se.email_sender_email,
-          se.email_body_preview,
-          se.email_has_attachments
-        FROM shipping_emails se
-        INNER JOIN staff_replies sr ON (
-          sr.conversation_id = se.conversation_id
-          OR sr.original_email_id = se.email_id
-        )
-        WHERE 1=1
-          ${ignoredEmailFilterClause}
-        ORDER BY se.email_received_date DESC
-        LIMIT $1 OFFSET $2`;
-      emailsParams = [limit, offset, ...ignoredEmailFilterParams];
-      countQuery = `
-        SELECT COUNT(DISTINCT se.email_id)
-        FROM shipping_emails se
-        INNER JOIN staff_replies sr ON (
-          sr.conversation_id = se.conversation_id
-          OR sr.original_email_id = se.email_id
-        )
-        ${ignoredEmails.length > 0 ? 'WHERE LOWER(se.email_sender_email) != ALL($1::text[])' : ''}`;
-      countQueryParams = ignoredEmails.length > 0 ? [ignoredEmails.map((e) => e.toLowerCase())] : [];
-    } else {
-      // Show all emails
+      // Filter to only show FIRST email per conversation (to avoid "Reply before email" issue)
+      // When multiple emails share a conversation_id, only show the earliest one
       emailsQuery = `
         SELECT
           se.email_id,
@@ -340,12 +327,59 @@ export async function GET(request: NextRequest) {
           se.email_body_preview,
           se.email_has_attachments
         FROM shipping_emails se
-        WHERE 1=1
-          ${ignoredEmailFilterClause}
+        INNER JOIN (
+          -- Get the first email_id for each conversation that has staff replies
+          SELECT DISTINCT ON (COALESCE(se2.conversation_id, se2.email_id::text))
+            se2.email_id,
+            COALESCE(se2.conversation_id, se2.email_id::text) as conv_key
+          FROM shipping_emails se2
+          INNER JOIN staff_replies sr ON (
+            sr.conversation_id = se2.conversation_id
+            OR sr.original_email_id = se2.email_id
+          )
+          WHERE 1=1
+            ${ignoredEmails.length > 0 ? `AND LOWER(se2.email_sender_email) != ALL($3::text[])` : ''}
+          ORDER BY COALESCE(se2.conversation_id, se2.email_id::text), se2.email_received_date ASC
+        ) first_emails ON se.email_id = first_emails.email_id
         ORDER BY se.email_received_date DESC
         LIMIT $1 OFFSET $2`;
       emailsParams = [limit, offset, ...ignoredEmailFilterParams];
-      countQuery = `SELECT COUNT(*) FROM shipping_emails
+      countQuery = `
+        SELECT COUNT(DISTINCT COALESCE(se.conversation_id, se.email_id::text))
+        FROM shipping_emails se
+        INNER JOIN staff_replies sr ON (
+          sr.conversation_id = se.conversation_id
+          OR sr.original_email_id = se.email_id
+        )
+        ${ignoredEmails.length > 0 ? 'WHERE LOWER(se.email_sender_email) != ALL($1::text[])' : ''}`;
+      countQueryParams = ignoredEmails.length > 0 ? [ignoredEmails.map((e) => e.toLowerCase())] : [];
+    } else {
+      // Show FIRST email per conversation (group by conversation_id)
+      emailsQuery = `
+        SELECT
+          se.email_id,
+          se.email_message_id,
+          se.conversation_id,
+          se.email_subject,
+          se.email_received_date,
+          se.email_sender_name,
+          se.email_sender_email,
+          se.email_body_preview,
+          se.email_has_attachments
+        FROM shipping_emails se
+        INNER JOIN (
+          -- Get the first email_id for each conversation
+          SELECT DISTINCT ON (COALESCE(conversation_id, email_id::text))
+            email_id
+          FROM shipping_emails
+          WHERE 1=1
+            ${ignoredEmails.length > 0 ? `AND LOWER(email_sender_email) != ALL($3::text[])` : ''}
+          ORDER BY COALESCE(conversation_id, email_id::text), email_received_date ASC
+        ) first_emails ON se.email_id = first_emails.email_id
+        ORDER BY se.email_received_date DESC
+        LIMIT $1 OFFSET $2`;
+      emailsParams = [limit, offset, ...ignoredEmailFilterParams];
+      countQuery = `SELECT COUNT(DISTINCT COALESCE(conversation_id, email_id::text)) FROM shipping_emails
         ${ignoredEmails.length > 0 ? 'WHERE LOWER(email_sender_email) != ALL($1::text[])' : ''}`;
       countQueryParams = ignoredEmails.length > 0 ? [ignoredEmails.map((e) => e.toLowerCase())] : [];
     }
