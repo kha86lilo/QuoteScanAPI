@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import pool from '@/lib/db';
+import { isEmailIgnored } from '@/lib/configurationService';
 
 export async function GET(
   request: Request,
@@ -25,6 +26,14 @@ export async function GET(
     }
 
     const email = emailResult.rows[0];
+
+    // Check if sender email is in the ignored list
+    if (email.email_sender_email && await isEmailIgnored(email.email_sender_email)) {
+      return NextResponse.json(
+        { error: 'This email is from an ignored sender' },
+        { status: 403 }
+      );
+    }
 
     // Get quotes for this email with their matches and AI pricing recommendations
     const quotesResult = await client.query(

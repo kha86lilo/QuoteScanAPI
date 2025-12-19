@@ -6,6 +6,7 @@
 import type { Request, Response } from 'express';
 import * as db from '../config/db.js';
 import { getFeedbackForHistoricalQuotes, getQuoteIdsByStartDate } from '../config/db.js';
+import { isServiceIgnored } from '../config/configurationService.js';
 import {
   asyncHandler,
   NotFoundError,
@@ -129,31 +130,7 @@ interface RunAllMatchingBody {
   limit?: number;
   async?: boolean;
 }
-
-/**
- * Get matches for a specific quote
- * GET /api/matches/quote/:quoteId
- */
-export const getMatchesForQuote = asyncHandler(async (req: Request, res: Response) => {
-  const { quoteId } = req.params;
-  const { limit: limitStr, minScore: minScoreStr } = req.query as MatchQuery;
-  const limit = parseInt(limitStr || '10');
-  const minScore = parseFloat(minScoreStr || '0');
-
-  try {
-    const matches = await db.getMatchesForQuote(quoteId, { limit, minScore });
-
-    res.json({
-      success: true,
-      quoteId: parseInt(quoteId),
-      count: matches.length,
-      matches,
-    });
-  } catch (error) {
-    throw new DatabaseError('fetching matches for quote', error as Error);
-  }
-});
-
+ 
 /**
  * Get a single match by ID
  * GET /api/matches/:matchId
@@ -601,111 +578,7 @@ export const runMatchingForQuotes = asyncHandler(async (req: Request, res: Respo
   }
 });
 
-/**
- * Get pricing suggestion with AI prompt for a quote
- * GET /api/matches/pricing-suggestion/:quoteId
- * Returns matches + AI prompt for pricing recommendation
- */
-export const getPricingSuggestion = asyncHandler(async (req: Request, res: Response) => {
-  const { quoteId } = req.params;
-  const { limit: limitStr } = req.query as { limit?: string };
-  const limit = parseInt(limitStr || '5');
-
-  const quoteIdInt = parseInt(quoteId);
-  if (isNaN(quoteIdInt)) {
-    throw new ValidationError('quoteId must be a valid integer');
-  }
-
-  try {
-    // Get the source quote
-    const sourceQuote = await db.getQuoteForMatching(quoteIdInt);
-    if (!sourceQuote) {
-      throw new NotFoundError(`Quote with ID: ${quoteId}`);
-    }
-
-    // Get historical quotes for matching
-    const historicalQuotes = await db.getHistoricalQuotesForMatching([quoteIdInt], {
-      limit: 500,
-      onlyWithPrice: true,
-    });
-
-    // Get feedback data for historical quotes to boost matches with positive feedback
-    const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
-    const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
-
-    // Calculate route distance for the source quote
-    const routeDistance = await calculateQuoteDistance(sourceQuote);
-    const sourceDistanceMiles = routeDistance?.distanceMiles ?? null;
-
-    // Find enhanced matches with feedback data and distance
-    const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
-      minScore: 0.3,
-      maxMatches: limit,
-      feedbackData,
-    }, sourceDistanceMiles);
-
-    // Generate pricing prompt with route distance for AI context
-    const pricingPrompt = generatePricingPrompt(sourceQuote, matches, routeDistance);
-
-    // Calculate aggregate suggested price
-    let aggregateSuggestion: {
-      weightedAverage: number;
-      range: { low: number; high: number };
-      confidence: number;
-      basedOn: number;
-    } | null = null;
-
-    if (matches.length > 0) {
-      const pricesWithConfidence = matches
-        .filter((m) => m.suggested_price && m.suggested_price > 0)
-        .map((m) => ({
-          price: m.suggested_price!,
-          confidence: m.price_confidence || 0.5,
-          weight: m.similarity_score * (m.price_confidence || 0.5),
-        }));
-
-      if (pricesWithConfidence.length > 0) {
-        const totalWeight = pricesWithConfidence.reduce((sum, p) => sum + p.weight, 0);
-        const weightedAvg =
-          pricesWithConfidence.reduce((sum, p) => sum + p.price * p.weight, 0) / totalWeight;
-
-        const prices = pricesWithConfidence.map((p) => p.price);
-        aggregateSuggestion = {
-          weightedAverage: Math.round(weightedAvg),
-          range: {
-            low: Math.round(Math.min(...prices) * 0.9),
-            high: Math.round(Math.max(...prices) * 1.1),
-          },
-          confidence: Math.round((totalWeight / pricesWithConfidence.length) * 100) / 100,
-          basedOn: pricesWithConfidence.length,
-        };
-      }
-    }
-
-    res.json({
-      success: true,
-      quoteId: quoteIdInt,
-      sourceQuote: {
-        route: `${sourceQuote.origin_city || 'Unknown'}, ${sourceQuote.origin_country || ''} → ${sourceQuote.destination_city || 'Unknown'}, ${sourceQuote.destination_country || ''}`,
-        service: sourceQuote.service_type,
-        normalizedService: normalizeServiceType(sourceQuote.service_type),
-        cargo: sourceQuote.cargo_description,
-        cargoCategory: classifyCargo(sourceQuote.cargo_description),
-        weight: sourceQuote.cargo_weight,
-        weightUnit: sourceQuote.weight_unit,
-        distanceMiles: routeDistance?.distanceMiles ?? null,
-        estimatedTransit: routeDistance?.durationText ?? null,
-      },
-      matchCount: matches.length,
-      aggregateSuggestion,
-      topMatches: matches.slice(0, 5),
-      pricingPrompt,
-    });
-  } catch (error) {
-    if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('generating pricing suggestion', error as Error);
-  }
-});
+ 
 
 /**
  * Analyze a quote request (for debugging/testing matching)
@@ -727,6 +600,17 @@ export const analyzeQuoteRequest = asyncHandler(async (req: Request, res: Respon
     number_of_pieces = 1,
     hazardous_material = false,
   } = req.body as AnalyzeQuoteBody;
+
+  // Check if service type is ignored
+  if (service_type && await isServiceIgnored(service_type)) {
+    return res.json({
+      success: false,
+      message: `Service type "${service_type}" is in the ignored services list`,
+      analysis: null,
+      matchCount: 0,
+      topMatches: [],
+    });
+  }
 
   // Build a virtual quote object for analysis
   const virtualQuote: Partial<Quote> = {
@@ -985,75 +869,7 @@ export const recordOutcome = asyncHandler(async (req: Request, res: Response) =>
   }
 });
 
-/**
- * Get enhanced pricing suggestion with feedback-based adjustments
- * GET /api/matches/smart-pricing/:quoteId
- */
-export const getSmartPricing = asyncHandler(async (req: Request, res: Response) => {
-  const { quoteId } = req.params;
-
-  const quoteIdInt = parseInt(quoteId);
-  if (isNaN(quoteIdInt)) {
-    throw new ValidationError('quoteId must be a valid integer');
-  }
-
-  try {
-    // Get the source quote
-    const sourceQuote = await db.getQuoteForMatching(quoteIdInt);
-    if (!sourceQuote) {
-      throw new NotFoundError(`Quote with ID: ${quoteId}`);
-    }
-
-    // Get historical quotes for matching
-    const historicalQuotes = await db.getHistoricalQuotesForMatching([quoteIdInt], {
-      limit: 500,
-      onlyWithPrice: true,
-    });
-
-    // Get feedback data for historical quotes
-    const historicalQuoteIds = historicalQuotes.map(q => q.quote_id!).filter(id => id != null);
-    const feedbackData = await getFeedbackForHistoricalQuotes(historicalQuoteIds);
-
-    // Calculate route distance for the source quote
-    const routeDistance = await calculateQuoteDistance(sourceQuote);
-    const sourceDistanceMiles = routeDistance?.distanceMiles ?? null;
-
-    // Find enhanced matches with feedback data and distance
-    const matches = findEnhancedMatches(sourceQuote, historicalQuotes, {
-      minScore: 0.3,
-      maxMatches: 10,
-      feedbackData,
-    }, sourceDistanceMiles);
-
-    // Get smart pricing with feedback adjustments
-    const smartPricing = await suggestPriceWithFeedback(sourceQuote, matches);
-
-    res.json({
-      success: true,
-      quoteId: quoteIdInt,
-      sourceQuote: {
-        route: `${sourceQuote.origin_city || 'Unknown'} → ${sourceQuote.destination_city || 'Unknown'}`,
-        service: sourceQuote.service_type,
-        cargo: sourceQuote.cargo_description,
-        distanceMiles: routeDistance?.distanceMiles ?? null,
-        estimatedTransit: routeDistance?.durationText ?? null,
-      },
-      smartPricing,
-      matchCount: matches.length,
-      topMatches: matches.slice(0, 3).map((m) => ({
-        matchedQuoteId: m.matched_quote_id,
-        score: m.similarity_score,
-        suggestedPrice: m.suggested_price,
-        route: `${m.matchedQuoteData?.origin} → ${m.matchedQuoteData?.destination}`,
-        feedbackBoost: m.feedbackBoost,
-        hasFeedback: m.feedbackData ? m.feedbackData.total_feedback_count > 0 : false,
-      })),
-    });
-  } catch (error) {
-    if (error instanceof NotFoundError) throw error;
-    throw new DatabaseError('generating smart pricing', error as Error);
-  }
-});
+ 
 
 // =====================================================
 // Run All Matching Endpoint

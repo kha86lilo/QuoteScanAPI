@@ -825,53 +825,7 @@ interface GetMatchesOptions {
   minScore?: number;
 }
 
-/**
- * Get matches for a quote
- */
-async function getMatchesForQuote(
-  quoteId: string | number,
-  options: GetMatchesOptions = {}
-): Promise<QuoteMatch[]> {
-  const { limit = 10, minScore = 0 } = options;
-  const client = await pool.connect();
-  try {
-    const result = await client.query(
-      `SELECT
-        m.*,
-        q.client_company_name,
-        q.origin_city,
-        q.origin_country,
-        q.destination_city,
-        q.destination_country,
-        q.cargo_description,
-        q.cargo_weight,
-        q.weight_unit,
-        q.service_type,
-        q.final_agreed_price,
-        q.initial_quote_amount,
-        q.quote_status,
-        q.quote_date,
-        COALESCE(fb.feedback_count, 0) as feedback_count,
-        fb.avg_rating
-      FROM quote_matches m
-      INNER JOIN shipping_quotes q ON m.matched_quote_id = q.quote_id
-      LEFT JOIN ai_pricing_recommendations apr ON m.source_quote_id = apr.quote_id
-      LEFT JOIN (
-        SELECT ai_price_id, COUNT(*) as feedback_count, AVG(rating) as avg_rating
-        FROM quote_ai_price_feedback
-        GROUP BY ai_price_id
-      ) fb ON apr.id = fb.ai_price_id
-      WHERE m.source_quote_id = $1 AND m.similarity_score >= $2
-      ORDER BY m.similarity_score DESC
-      LIMIT $3`,
-      [quoteId, minScore, limit]
-    );
-
-    return result.rows;
-  } finally {
-    client.release();
-  }
-}
+ 
 
 /**
  * Get a single match by ID
@@ -2012,8 +1966,7 @@ export {
   getCurrentTime,
   // Quote matches
   createQuoteMatch,
-  createQuoteMatchesBulk,
-  getMatchesForQuote,
+  createQuoteMatchesBulk, 
   getMatchById,
   deleteMatch,
   // AI Price feedback

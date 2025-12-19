@@ -55,27 +55,14 @@ router.post('/run', matchController.runMatchingForQuotes);
  * }
  */
 router.post('/run-all', matchController.runAllMatching);
-
-/**
- * Get pricing suggestion with AI prompt for a quote
- * GET /api/matches/pricing-suggestion/:quoteId
- * Query params: limit (default 5)
- */
-router.get('/pricing-suggestion/:quoteId', matchController.getPricingSuggestion);
-
+ 
 /**
  * Analyze a quote request without saving (for testing/preview)
  * POST /api/matches/analyze
  * Body: { origin_city, destination_city, service_type, cargo_description, cargo_weight, ... }
  */
 router.post('/analyze', matchController.analyzeQuoteRequest);
-
-/**
- * Get smart pricing with feedback-based adjustments
- * GET /api/matches/smart-pricing/:quoteId
- */
-router.get('/smart-pricing/:quoteId', matchController.getSmartPricing);
-
+ 
 /**
  * Trigger feedback learning to update matching weights
  * POST /api/matches/learn
@@ -108,13 +95,7 @@ router.post('/extract-and-match', matchController.extractAndMatch);
 // =====================================================
 // Match CRUD Operations
 // =====================================================
-
-/**
- * Get matches for a specific quote
- * GET /api/matches/quote/:quoteId
- * Query params: limit, minScore
- */
-router.get('/quote/:quoteId', matchController.getMatchesForQuote);
+ 
 
 /**
  * Create multiple matches in bulk

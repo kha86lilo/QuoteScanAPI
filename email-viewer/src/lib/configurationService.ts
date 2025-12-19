@@ -112,6 +112,28 @@ async function buildIgnoredServicesClause(
 }
 
 /**
+ * Check if an email address should be ignored
+ */
+async function isEmailIgnored(emailAddress: string): Promise<boolean> {
+  if (!emailAddress) return false;
+  const ignoredEmails = await getIgnoredEmails();
+  return ignoredEmails.some(
+    (ignored) => ignored.toLowerCase() === emailAddress.toLowerCase()
+  );
+}
+
+/**
+ * Check if a service type should be ignored
+ */
+async function isServiceIgnored(serviceType: string): Promise<boolean> {
+  if (!serviceType) return false;
+  const ignoredServices = await getIgnoredServices();
+  return ignoredServices.some(
+    (ignored) => ignored.toLowerCase() === serviceType.toLowerCase()
+  );
+}
+
+/**
  * Clear configuration cache
  */
 function clearConfigCache(): void {
@@ -122,6 +144,8 @@ export {
   getConfigValue,
   getIgnoredEmails,
   getIgnoredServices,
+  isEmailIgnored,
+  isServiceIgnored,
   buildIgnoredEmailsClause,
   buildIgnoredServicesClause,
   clearConfigCache,
