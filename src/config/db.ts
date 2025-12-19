@@ -30,6 +30,10 @@ import type {
   PricingReplyResult,
   PricingData,
 } from '../types/index.js';
+import {
+  getIgnoredEmails,
+  getIgnoredServices,
+} from './configurationService.js';
 
 dotenv.config();
 
@@ -1098,6 +1102,7 @@ interface HistoricalQuotesOptions {
 
 /**
  * Get historical quotes for fuzzy matching
+ * Filters out ignored emails and services from configuration
  */
 async function getHistoricalQuotesForMatching(
   excludeQuoteIds: number[] = [],
@@ -1106,7 +1111,13 @@ async function getHistoricalQuotesForMatching(
   const { limit = 500, onlyWithPrice = true } = options;
   const client = await pool.connect();
   try {
-    const params: (number[] | number)[] = [];
+    // Get ignored emails and services from configuration
+    const [ignoredEmails, ignoredServices] = await Promise.all([
+      getIgnoredEmails(),
+      getIgnoredServices(),
+    ]);
+
+    const params: (number[] | number | string[])[] = [];
     let paramIndex = 1;
 
     let excludeClause = '';
@@ -1116,8 +1127,25 @@ async function getHistoricalQuotesForMatching(
       paramIndex++;
     }
 
+    // Filter out ignored emails
+    let ignoredEmailsClause = '';
+    if (ignoredEmails.length > 0) {
+      ignoredEmailsClause = `AND LOWER(sr.sender_email) != ALL($${paramIndex}::text[])`;
+      params.push(ignoredEmails.map((e) => e.toLowerCase()));
+      paramIndex++;
+    }
+
+    // Filter out ignored services
+    let ignoredServicesClause = '';
+    if (ignoredServices.length > 0) {
+      ignoredServicesClause = `AND UPPER(sqr.service_type) != ALL($${paramIndex}::text[])`;
+      params.push(ignoredServices.map((s) => s.toUpperCase()));
+      paramIndex++;
+    }
+
     // Use staff_quotes_replies as primary source - these are actual quoted prices from staff.
     // Join to shipping_quotes to enrich historical rows with hazmat/dimensions/etc.
+    // Also join to staff_replies to filter by sender email
     const result = await client.query(
       `SELECT
         sqr.related_quote_id as quote_id,
@@ -1148,11 +1176,14 @@ async function getHistoricalQuotesForMatching(
         sqr.processed_at as created_at
       FROM staff_quotes_replies sqr
       LEFT JOIN shipping_quotes q ON q.quote_id = sqr.related_quote_id
+      LEFT JOIN staff_replies sr ON sr.reply_id = sqr.staff_reply_id
       WHERE sqr.is_pricing_email = true
         AND sqr.origin_city IS NOT NULL
         AND sqr.destination_city IS NOT NULL
         ${onlyWithPrice ? `AND sqr.quoted_price >= 100 AND sqr.quoted_price <= 50000` : ''}
         ${excludeClause.replace('q.quote_id', 'sqr.related_quote_id')}
+        ${ignoredEmailsClause}
+        ${ignoredServicesClause}
       ORDER BY sqr.processed_at DESC
       LIMIT $${paramIndex}`,
       [...params, limit]
@@ -1324,43 +1355,72 @@ async function getQuoteIdsByStartDate(startDate: string, limit = 1000): Promise<
 
 /**
  * Get a quote by ID with fields needed for matching
+ * Returns null if the quote's service type is in the ignored list
  */
 async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
   const client = await pool.connect();
   try {
+    // Get ignored services from configuration
+    const ignoredServices = await getIgnoredServices();
+
     const result = await client.query(
       `SELECT
-        quote_id,
-        client_company_name,
-        origin_city,
-        origin_state_province,
-        origin_country,
-        destination_city,
-        destination_state_province,
-        destination_country,
-        cargo_description,
-        cargo_weight,
-        weight_unit,
-        cargo_length,
-        cargo_width,
-        cargo_height,
-        dimension_unit,
-        number_of_pieces,
-        service_type,
-        service_level,
-        packaging_type,
-        hazardous_material,
-        initial_quote_amount,
-        final_agreed_price,
-        quote_status,
-        quote_date,
-        created_at
-      FROM shipping_quotes
-      WHERE quote_id = $1`,
+        q.quote_id,
+        q.client_company_name,
+        q.origin_city,
+        q.origin_state_province,
+        q.origin_country,
+        q.destination_city,
+        q.destination_state_province,
+        q.destination_country,
+        q.cargo_description,
+        q.cargo_weight,
+        q.weight_unit,
+        q.cargo_length,
+        q.cargo_width,
+        q.cargo_height,
+        q.dimension_unit,
+        q.number_of_pieces,
+        q.service_type,
+        q.service_level,
+        q.packaging_type,
+        q.hazardous_material,
+        q.initial_quote_amount,
+        q.final_agreed_price,
+        q.quote_status,
+        q.quote_date,
+        q.created_at,
+        e.email_sender_email
+      FROM shipping_quotes q
+      LEFT JOIN shipping_emails e ON q.email_id = e.email_id
+      WHERE q.quote_id = $1`,
       [quoteId]
     );
 
-    return result.rows.length > 0 ? result.rows[0] : null;
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const quote = result.rows[0];
+
+    // Check if service type is ignored
+    if (quote.service_type && ignoredServices.some(
+      (s) => s.toLowerCase() === quote.service_type.toLowerCase()
+    )) {
+      console.log(`  Quote ${quoteId} skipped: service type "${quote.service_type}" is ignored`);
+      return null;
+    }
+
+    // Check if sender email is ignored
+    const ignoredEmails = await getIgnoredEmails();
+    if (quote.email_sender_email && ignoredEmails.some(
+      (e) => e.toLowerCase() === quote.email_sender_email.toLowerCase()
+    )) {
+      console.log(`  Quote ${quoteId} skipped: sender "${quote.email_sender_email}" is ignored`);
+      return null;
+    }
+
+    return quote;
   } finally {
     client.release();
   }
