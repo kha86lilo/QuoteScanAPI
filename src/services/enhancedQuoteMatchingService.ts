@@ -309,7 +309,8 @@ function detectEquipmentType(
 interface FallbackPricingResult {
   price: number;
   priceRange: PriceRange;
-  confidence: 'LOW' | 'VERY_LOW';
+  /** Confidence as a percentage (0-100) */
+  confidence_percentage: number;
   reasoning: string;
   breakdown: {
     baseRate: number;
@@ -419,7 +420,7 @@ function calculateFallbackPricing(
   return {
     price: roundedPrice,
     priceRange: { low: roundedLow, high: roundedHigh },
-    confidence: distanceMiles ? 'LOW' : 'VERY_LOW',
+    confidence_percentage: distanceMiles ? 35 : 25, // LOW = 35%, VERY_LOW = 25%
     reasoning: reasoningParts.join('. '),
     breakdown: {
       baseRate: rates.avg,
@@ -1768,7 +1769,8 @@ function detectAndRemoveOutliers(
  */
 interface StatisticalPricingResult {
   recommendedPrice: number;
-  confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW';
+  /** Confidence as a percentage (0-100) */
+  confidence_percentage: number;
   priceRange: PriceRange;
   methodology: string;
   stats: {
@@ -1815,30 +1817,31 @@ function calculateStatisticalPricing(
     ? pricedMatches.reduce((sum, m) => sum + m.suggested_price! * m.similarity_score, 0) / totalWeight
     : mean;
 
-  // Determine confidence based on data quality
-  let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW';
+  // Determine confidence percentage based on data quality
+  // HIGH = 85%, MEDIUM = 70%, LOW = 55%, VERY_LOW = 40%
+  let confidence_percentage: number;
   let methodology: string;
 
   if (pricedMatches.length >= 5 && coeffOfVariation < 0.20 && scores[0]! >= 0.75) {
-    confidence = 'HIGH';
+    confidence_percentage = 85; // HIGH
     methodology = 'Weighted average of 5+ consistent matches with high similarity';
   } else if (pricedMatches.length >= 3 && coeffOfVariation < 0.35 && scores[0]! >= 0.60) {
-    confidence = 'MEDIUM';
+    confidence_percentage = 70; // MEDIUM
     methodology = 'Weighted average with moderate consistency';
   } else if (pricedMatches.length >= 1 && scores[0]! >= 0.55) {
-    confidence = 'LOW';
+    confidence_percentage = 55; // LOW
     methodology = 'Limited matches or high price variance';
   } else {
-    confidence = 'VERY_LOW';
+    confidence_percentage = 40; // VERY_LOW
     methodology = 'Insufficient data quality for reliable pricing';
   }
 
   // Choose recommended price based on confidence
   let recommendedPrice: number;
-  if (confidence === 'HIGH') {
+  if (confidence_percentage >= 85) {
     // High confidence: use weighted average
     recommendedPrice = weightedAvg;
-  } else if (confidence === 'MEDIUM') {
+  } else if (confidence_percentage >= 70) {
     // Medium confidence: blend weighted average with median for stability
     recommendedPrice = (weightedAvg * 0.6 + median * 0.4);
   } else {
@@ -1847,9 +1850,9 @@ function calculateStatisticalPricing(
   }
 
   // Calculate price range based on data spread
-  const rangeMultiplier = confidence === 'HIGH' ? 0.10 :
-                          confidence === 'MEDIUM' ? 0.15 :
-                          confidence === 'LOW' ? 0.20 : 0.25;
+  const rangeMultiplier = confidence_percentage >= 85 ? 0.10 :
+                          confidence_percentage >= 70 ? 0.15 :
+                          confidence_percentage >= 55 ? 0.20 : 0.25;
 
   const priceRange: PriceRange = {
     low: Math.round(recommendedPrice * (1 - rangeMultiplier)),
@@ -1864,7 +1867,7 @@ function calculateStatisticalPricing(
 
   return {
     recommendedPrice: Math.round(recommendedPrice),
-    confidence,
+    confidence_percentage,
     priceRange,
     methodology,
     stats: {
@@ -2085,7 +2088,8 @@ async function getAIPricingRecommendation(
           target_price?: number;
           stretch_price?: number;
         };
-        confidence?: string;
+        /** Confidence as a percentage (0-100) */
+        confidence_percentage?: number;
         price_breakdown?: {
           linehaul?: number;
           fuel_surcharge?: number;
@@ -2213,13 +2217,13 @@ async function getAIPricingRecommendation(
       }
 
       // Confidence indicator
-      if (aiResponse?.confidence) {
-        const confidenceText = aiResponse.confidence === 'HIGH'
+      if (aiResponse?.confidence_percentage !== undefined) {
+        const confidenceText = aiResponse.confidence_percentage >= 80
           ? 'High confidence - strong historical data support'
-          : aiResponse.confidence === 'MEDIUM'
+          : aiResponse.confidence_percentage >= 60
             ? 'Medium confidence - reasonable market comparables'
             : 'Low confidence - limited data, recommend additional market validation';
-        sections.push(`CONFIDENCE: ${confidenceText}`);
+        sections.push(`CONFIDENCE: ${aiResponse.confidence_percentage}% - ${confidenceText}`);
       }
 
       return sections.join('\n\n');
@@ -2267,13 +2271,13 @@ ${truncated}`;
 
         const aiSuggestedPrice = parsedResult.amount;
         const aiFullResponse = parsedResult.fullResponse;
-        const aiConfidence = aiFullResponse?.confidence;
+        const aiConfidencePercentage = aiFullResponse?.confidence_percentage ?? 0;
 
-        // PRIORITY: When AI has HIGH confidence, trust it directly without algorithmic constraints
+        // PRIORITY: When AI has HIGH confidence (>=80%), trust it directly without algorithmic constraints
         // This handles cases where algorithmic matching fails (wrong comparables, project cargo, etc.)
-        if (aiSuggestedPrice && aiConfidence === 'HIGH') {
+        if (aiSuggestedPrice && aiConfidencePercentage >= 80) {
           console.log(
-            `      -> AI HIGH confidence pricing: Using AI price $${aiSuggestedPrice.toLocaleString()} directly`
+            `      -> AI HIGH confidence (${aiConfidencePercentage}%) pricing: Using AI price $${aiSuggestedPrice.toLocaleString()} directly`
           );
           const comprehensiveReasoning = buildAIReasoning(aiFullResponse, algorithmicRecommendation?.reasoning);
           const aiQuote = aiFullResponse?.recommended_quote;
@@ -2286,7 +2290,7 @@ ${truncated}`;
             floor_price: aiQuote?.floor_price ?? finalPrice * 0.8,
             target_price: aiQuote?.target_price ?? finalPrice * 0.92,
             ceiling_price: aiQuote?.stretch_price ?? finalPrice * 1.05,
-            confidence: 'HIGH' as const,
+            confidence_percentage: aiConfidencePercentage,
             reasoning: comprehensiveReasoning || `AI HIGH confidence recommendation: $${finalPrice.toLocaleString()}`,
             price_breakdown: aiBreakdown ? {
               linehaul: aiBreakdown.linehaul,
@@ -2314,22 +2318,23 @@ ${truncated}`;
             : aiSuggestedPrice;
 
           // Weighted blend between algorithmic recommendation and AI suggestion.
-          // Project cargo tends to be underrepresented in historical data; when confidence is LOW and cargo is
+          // Project cargo tends to be underrepresented in historical data; when confidence is LOW (<55%) and cargo is
           // machinery/vehicles/oversized, we lean more on the AI.
+          const algoConfidencePercentage = algorithmicRecommendation.confidence_percentage ?? 50;
           const sourceCargoCat = classifyCargo(sourceQuote.cargo_description);
           const sourceMiles = routeDistance?.distanceMiles ?? null;
           const useHeavyAiForLowConfidenceProjectCargo =
-            algorithmicRecommendation.confidence === 'LOW' &&
+            algoConfidencePercentage < 55 &&
             (sourceCargoCat === 'MACHINERY' || sourceCargoCat === 'OVERSIZED') &&
             (typeof sourceMiles === 'number' ? sourceMiles >= 400 : false);
 
           // For non-HIGH confidence AI, apply ratio constraints
-          if (algorithmicRecommendation.confidence !== 'LOW') {
+          if (algoConfidencePercentage >= 55) {
             const rawRatio = aiSuggestedPrice / algorithmicRecommendation.recommended_price;
 
             if (!Number.isFinite(rawRatio) || rawRatio < 0.85 || rawRatio > 1.15) {
               console.log(
-                `      -> AI adjustment ignored (AI confidence=${aiConfidence}, algo confidence=${algorithmicRecommendation.confidence}, ratio=${rawRatio.toFixed(2)} outside 0.85..1.15)`
+                `      -> AI adjustment ignored (AI confidence=${aiConfidencePercentage}%, algo confidence=${algoConfidencePercentage}%, ratio=${rawRatio.toFixed(2)} outside 0.85..1.15)`
               );
               return algorithmicRecommendation;
             }
@@ -2337,7 +2342,7 @@ ${truncated}`;
 
           let blendedPrice: number;
           let blendMethod: string;
-          if (algorithmicRecommendation.confidence === 'LOW') {
+          if (algoConfidencePercentage < 55) {
             if (useHeavyAiForLowConfidenceProjectCargo) {
               console.log(`      -> Project Cargo Override activated for ${sourceCargoCat}`);
               blendedPrice = Math.round((algorithmicRecommendation.recommended_price * 0.25) + (guardedAi * 0.75));
@@ -2371,7 +2376,7 @@ ${truncated}`;
             target_price: aiQuote?.target_price ?? algorithmicRecommendation.target_price,
             ceiling_price: aiQuote?.stretch_price ?? algorithmicRecommendation.ceiling_price,
             // Use AI confidence if available
-            confidence: (aiFullResponse?.confidence as 'HIGH' | 'MEDIUM' | 'LOW') ?? algorithmicRecommendation.confidence,
+            confidence_percentage: aiConfidencePercentage || algoConfidencePercentage,
             // Comprehensive reasoning with all AI details
             reasoning: `${comprehensiveReasoning} | [Blend] ${blendMethod}: Algo $${algorithmicRecommendation.recommended_price.toLocaleString()} + AI $${aiSuggestedPrice.toLocaleString()} → $${blendedPrice.toLocaleString()}`,
             // Include price breakdown if available
@@ -2398,7 +2403,7 @@ ${truncated}`;
 
           const aiQuote = aiFullResponse?.recommended_quote;
           const aiBreakdown = aiFullResponse?.price_breakdown;
-          const aiConfidence = (aiFullResponse?.confidence as 'HIGH' | 'MEDIUM' | 'LOW') || 'LOW';
+          const aiConfidencePct = aiConfidencePercentage || 50; // Default to 50% for AI-only
 
           // Build reasoning from AI response
           const comprehensiveReasoning = buildAIReasoning(aiFullResponse, undefined);
@@ -2408,7 +2413,7 @@ ${truncated}`;
             floor_price: aiQuote?.floor_price ?? Math.round(aiSuggestedPrice * 0.85),
             target_price: aiQuote?.target_price ?? aiSuggestedPrice,
             ceiling_price: aiQuote?.stretch_price ?? Math.round(aiSuggestedPrice * 1.15),
-            confidence: aiConfidence,
+            confidence_percentage: aiConfidencePct,
             reasoning: `[AI-Only Pricing - No Historical Data] ${comprehensiveReasoning}`,
             price_breakdown: aiBreakdown ? {
               linehaul: aiBreakdown.linehaul,
@@ -2522,12 +2527,10 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
 
           if (statPricing) {
             finalSuggestedPrice = statPricing.recommendedPrice;
-            finalPriceConfidence = statPricing.confidence === 'HIGH' ? 0.85 :
-                                   statPricing.confidence === 'MEDIUM' ? 0.70 :
-                                   statPricing.confidence === 'LOW' ? 0.55 : 0.40;
+            finalPriceConfidence = statPricing.confidence_percentage / 100;
             finalPriceRange = statPricing.priceRange;
             pricingSource = `statistical (${statPricing.methodology})`;
-            console.log(`    Statistical Price: $${statPricing.recommendedPrice.toLocaleString()} (${statPricing.confidence}, CV: ${statPricing.stats.coeffOfVariation})`);
+            console.log(`    Statistical Price: $${statPricing.recommendedPrice.toLocaleString()} (${statPricing.confidence_percentage}%, CV: ${statPricing.stats.coeffOfVariation})`);
           } else {
             // Fall back to best match price
             finalSuggestedPrice = matches[0]?.suggested_price;
@@ -2541,11 +2544,10 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
             aiPricing = await getAIPricingRecommendation(sourceQuote, matches, { useAI }, routeDistance);
             if (aiPricing && aiPricing.recommended_price) {
               finalSuggestedPrice = aiPricing.recommended_price;
-              finalPriceConfidence = aiPricing.confidence === 'HIGH' ? 0.9 :
-                                     aiPricing.confidence === 'MEDIUM' ? 0.7 : 0.5;
+              finalPriceConfidence = (aiPricing.confidence_percentage ?? 50) / 100;
               finalPriceRange = { low: aiPricing.floor_price!, high: aiPricing.ceiling_price! };
               pricingSource = 'ai_enhanced';
-              console.log(`    AI Price: $${aiPricing.recommended_price.toLocaleString()} (${aiPricing.confidence})`);
+              console.log(`    AI Price: $${aiPricing.recommended_price.toLocaleString()} (${aiPricing.confidence_percentage ?? 50}%)`);
 
               // Save AI pricing recommendation to dedicated table
               await db.saveAIPricingRecommendation(quoteId, sourceQuote.email_id, aiPricing);
@@ -2565,7 +2567,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
               floor_price: aiPricing.floor_price,
               target_price: aiPricing.target_price,
               ceiling_price: aiPricing.ceiling_price,
-              confidence: aiPricing.confidence,
+              confidence_percentage: aiPricing.confidence_percentage,
               reasoning: aiPricing.reasoning,
             } : null,
           }));
@@ -2593,11 +2595,12 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
             aiPricing = await getAIPricingRecommendation(sourceQuote, [], { useAI }, routeDistance);
             if (aiPricing && aiPricing.recommended_price) {
               finalSuggestedPrice = aiPricing.recommended_price;
-              finalPriceConfidence = aiPricing.confidence === 'HIGH' ? 0.7 :
-                                     aiPricing.confidence === 'MEDIUM' ? 0.5 : 0.4;
+              // For AI without history, use slightly lower confidence multipliers
+              const aiConfPct = aiPricing.confidence_percentage ?? 50;
+              finalPriceConfidence = aiConfPct >= 80 ? 0.7 : aiConfPct >= 60 ? 0.5 : 0.4;
               finalPriceRange = { low: aiPricing.floor_price!, high: aiPricing.ceiling_price! };
               pricingSource = 'ai_no_history';
-              console.log(`    AI Price (no history): $${aiPricing.recommended_price.toLocaleString()} (${aiPricing.confidence})`);
+              console.log(`    AI Price (no history): $${aiPricing.recommended_price.toLocaleString()} (${aiConfPct}%)`);
 
               // Save AI pricing recommendation to dedicated table
               await db.saveAIPricingRecommendation(quoteId, sourceQuote.email_id, aiPricing);
@@ -2617,16 +2620,13 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
           if (!aiPricing || !aiPricing.recommended_price) {
             const fallbackPricing = calculateFallbackPricing(sourceQuote, sourceDistanceMiles);
             finalSuggestedPrice = fallbackPricing.price;
-            finalPriceConfidence = fallbackPricing.confidence === 'LOW' ? 0.35 : 0.25;
+            finalPriceConfidence = fallbackPricing.confidence_percentage / 100;
             finalPriceRange = fallbackPricing.priceRange;
             pricingSource = 'fallback';
 
-            console.log(`    Fallback Price: $${fallbackPricing.price.toLocaleString()} (${fallbackPricing.confidence})`);
+            console.log(`    Fallback Price: $${fallbackPricing.price.toLocaleString()} (${fallbackPricing.confidence_percentage}%)`);
             console.log(`    Breakdown: ${fallbackPricing.reasoning}`);
 
-            // Create a synthetic match detail for the fallback pricing
-            // Map VERY_LOW to LOW for AIPricingDetails type compatibility
-            const mappedConfidence: 'HIGH' | 'MEDIUM' | 'LOW' = fallbackPricing.confidence === 'VERY_LOW' ? 'LOW' : 'LOW';
             results.matchDetails.push({
               quoteId,
               matchCount: 0,
@@ -2638,7 +2638,7 @@ async function processEnhancedMatches(newQuoteIds: number[], options: MatchingOp
                 floor_price: fallbackPricing.priceRange.low,
                 target_price: fallbackPricing.price,
                 ceiling_price: fallbackPricing.priceRange.high,
-                confidence: mappedConfidence,
+                confidence_percentage: fallbackPricing.confidence_percentage,
                 reasoning: `[FALLBACK] ${fallbackPricing.reasoning}`,
               },
             });
@@ -3092,6 +3092,12 @@ STABILITY / ANTI-ANCHORING:
       actualPrice: (m.feedbackData.actual_prices_used && m.feedbackData.actual_prices_used.length > 0)
         ? m.feedbackData.actual_prices_used[m.feedbackData.actual_prices_used.length - 1]
         : null,
+      // Include detailed feedback data for AI learning
+      positive_feedback_count: m.feedbackData.positive_feedback_count,
+      negative_feedback_count: m.feedbackData.negative_feedback_count,
+      feedback_reasons: m.feedbackData.feedback_reasons || [],
+      feedback_notes: m.feedbackData.feedback_notes || [],
+      actual_prices_used: m.feedbackData.actual_prices_used || [],
     } : null,
   }));
 
@@ -3149,7 +3155,7 @@ STABILITY / ANTI-ANCHORING:
 - recommended_price: $${algorithmicRecommendation.recommended_price.toLocaleString()}
 - floor_price: ${algorithmicRecommendation.floor_price ? '$' + algorithmicRecommendation.floor_price.toLocaleString() : 'N/A'}
 - ceiling_price: ${algorithmicRecommendation.ceiling_price ? '$' + algorithmicRecommendation.ceiling_price.toLocaleString() : 'N/A'}
-- confidence: ${algorithmicRecommendation.confidence || 'N/A'}
+- confidence: ${algorithmicRecommendation.confidence_percentage ? algorithmicRecommendation.confidence_percentage + '%' : 'N/A'}
 - reasoning: ${algorithmicRecommendation.reasoning || 'N/A'}
 
 CONSTRAINTS:

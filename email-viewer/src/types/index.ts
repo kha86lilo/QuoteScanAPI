@@ -92,7 +92,8 @@ export interface QuoteWithMatches extends ShippingQuote {
   ai_price_id: number | null;
   ai_recommended_price: number | null;
   ai_reasoning: string | null;
-  ai_confidence: string | null;
+  /** Confidence as a percentage (0-100) */
+  ai_confidence_percentage: number | null;
   floor_price: number | null;
   ceiling_price: number | null;
   target_price: number | null;
@@ -106,6 +107,8 @@ export interface PaginatedEmailsResponse {
   limit: number;
   offset: number;
   minDate: string;
+  availableServiceTypes: string[];
+  activeServiceFilter: string[];
 }
 
 // Dashboard Types

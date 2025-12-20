@@ -1894,7 +1894,7 @@ async function saveAIPricingRecommendation(
   try {
     const result = await client.query<AIPricingRecommendation>(
       `INSERT INTO ai_pricing_recommendations (
-        quote_id, email_id, ai_recommended_price, ai_reasoning, confidence,
+        quote_id, email_id, ai_recommended_price, ai_reasoning, confidence_percentage,
         floor_price, ceiling_price, target_price, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
       ON CONFLICT (quote_id)
@@ -1902,7 +1902,7 @@ async function saveAIPricingRecommendation(
         email_id = COALESCE($2, ai_pricing_recommendations.email_id),
         ai_recommended_price = $3,
         ai_reasoning = $4,
-        confidence = $5,
+        confidence_percentage = $5,
         floor_price = $6,
         ceiling_price = $7,
         target_price = $8,
@@ -1913,7 +1913,7 @@ async function saveAIPricingRecommendation(
         emailId ?? null,
         aiPricing.recommended_price ?? null,
         aiPricing.reasoning ?? null,
-        aiPricing.confidence ?? null,
+        aiPricing.confidence_percentage ?? null,
         aiPricing.floor_price ?? null,
         aiPricing.ceiling_price ?? null,
         aiPricing.target_price ?? null,

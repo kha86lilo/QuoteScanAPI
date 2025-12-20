@@ -440,16 +440,28 @@ export interface MatchMetadata {
   sourceDestRegion?: string | null;
 }
 
+export interface ReasoningPercentage {
+  historical_data_weight?: number;
+  market_conditions_weight?: number;
+  route_specifics_weight?: number;
+  feedback_adjustments_weight?: number;
+}
+
 export interface AIPricingDetails {
   recommended_price?: number;
   floor_price?: number;
   target_price?: number;
   ceiling_price?: number;
-  confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  /** Confidence as a percentage (0-100) */
+  confidence_percentage?: number;
   reasoning?: string;
+  /** Breakdown of how different factors influenced the price recommendation */
+  reasoning_percentage?: ReasoningPercentage;
   price_breakdown?: PriceBreakdown;
   market_factors?: string[];
   negotiation_room_percent?: number;
+  /** Summary of how historical feedback influenced this recommendation */
+  feedback_insights?: string;
 }
 
 export interface PriceBreakdown {
@@ -467,10 +479,15 @@ export interface AIPricingRecommendation {
   email_id?: number | null;
   ai_recommended_price?: number | null;
   ai_reasoning?: string | null;
-  confidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  /** Confidence as a percentage (0-100) */
+  confidence_percentage?: number | null;
   floor_price?: number | null;
   ceiling_price?: number | null;
   target_price?: number | null;
+  /** Breakdown of how different factors influenced the price recommendation */
+  reasoning_percentage?: ReasoningPercentage | null;
+  /** Summary of how historical feedback influenced this recommendation */
+  feedback_insights?: string | null;
   created_at?: Date;
   updated_at?: Date;
 }

@@ -221,6 +221,21 @@ This ensures pricing accuracy when historical comparables don't match current sh
 - Prepayment or quick pay terms: 2-3% discount
 - Long-term contracts: 5-8% discount
 
+## HISTORICAL FEEDBACK LEARNING
+When historical matches include feedback from previous quotes, use this data to refine your pricing:
+
+### Feedback Data Available:
+- **Feedback Reason**: Why the user rated the AI suggestion (e.g., "price_outdated", "excellent_suggestion", "wrong_route")
+- **Feedback Notes**: Detailed notes explaining the rating
+- **Actual Price Used**: The real price that was ultimately used for the shipment
+- **Rating**: Thumbs up (+1) or thumbs down (-1)
+
+### How to Use Feedback:
+1. **Actual Price Used**: If available, this is the most reliable data point - weight it heavily
+2. **Negative Feedback with Notes**: Understand WHY a price was rejected to avoid similar mistakes
+3. **Positive Feedback**: Validates that similar pricing worked well
+4. **Feedback Patterns**: If multiple matches show AI prices were consistently too high/low, adjust accordingly
+
 ## OUTPUT FORMAT
 Provide your recommendation in this structure:
 
@@ -232,7 +247,13 @@ Provide your recommendation in this structure:
     "target_price": 0.00,
     "stretch_price": 0.00
   },
-  "confidence": "HIGH|MEDIUM|LOW",
+  "confidence_percentage": 85,
+  "reasoning_percentage": {
+    "historical_data_weight": 40,
+    "market_conditions_weight": 25,
+    "route_specifics_weight": 20,
+    "feedback_adjustments_weight": 15
+  },
   "price_breakdown": {
     "linehaul": 0.00,
     "fuel_surcharge": 0.00,
@@ -252,9 +273,18 @@ Provide your recommendation in this structure:
       "price": 0.00
     }
   ],
-  "expiration_recommendation": "Quote valid for X days due to market volatility"
+  "expiration_recommendation": "Quote valid for X days due to market volatility",
+  "feedback_insights": "Summary of how historical feedback influenced this recommendation"
 }
-\`\`\``;
+\`\`\`
+
+### Reasoning Percentage Guidelines:
+- **confidence_percentage**: 0-100, how confident you are in this recommendation
+- **historical_data_weight**: How much historical match data influenced the price (0-100%)
+- **market_conditions_weight**: How much current market conditions influenced (0-100%)
+- **route_specifics_weight**: How much route-specific factors influenced (0-100%)
+- **feedback_adjustments_weight**: How much feedback data adjusted the price (0-100%)
+- These weights should sum to 100%`;
 
 export const QUOTE_COMPARISON_PROMPT = `You are analyzing a new quote request against historical similar quotes to provide pricing guidance.
 
@@ -505,12 +535,45 @@ function formatHistoricalMatches(matches: unknown[]): string {
 -- Per Mile Rate: ${distanceMiles && toNumberOrNull(quotedPrice) ? '$' + (toNumberOrNull(quotedPrice)! / Number(distanceMiles)).toFixed(2) + '/mile' : 'N/A'}`;
 
     if (feedback) {
+      // Extract detailed feedback data
+      const feedbackReasons = feedback.feedback_reasons || feedback.feedbackReasons || [];
+      const feedbackNotes = feedback.feedback_notes || feedback.feedbackNotes || [];
+      const actualPricesUsed = feedback.actual_prices_used || feedback.actualPricesUsed || [];
+      const positiveCount = feedback.positive_feedback_count ?? feedback.positiveFeedbackCount ?? 0;
+      const negativeCount = feedback.negative_feedback_count ?? feedback.negativeFeedbackCount ?? 0;
+      const rating = positiveCount > negativeCount ? 'Positive' : negativeCount > positiveCount ? 'Negative' : 'Mixed';
+
       matchText += `
 
 **Historical Feedback:**
+- Rating: ${rating} (👍 ${positiveCount} / 👎 ${negativeCount})
 - Won: ${feedback.won !== undefined ? (feedback.won ? 'Yes ✓' : 'No ✗') : 'Unknown'}
-- Customer Response: ${feedback.customerResponse || feedback.customer_response || 'None recorded'}
-- Actual Price Paid: ${fmtMoney(feedback.actualPrice ?? feedback.actual_price)}`;
+- Actual Price(s) Used: ${actualPricesUsed.length > 0 ? actualPricesUsed.map((p: number) => fmtMoney(p)).join(', ') : 'N/A'}`;
+
+      if (feedbackReasons.length > 0) {
+        matchText += `
+- Feedback Reasons: ${feedbackReasons.filter((r: string | null) => r).join(', ')}`;
+      }
+
+      if (feedbackNotes.length > 0) {
+        const validNotes = feedbackNotes.filter((n: string | null) => n && n.trim());
+        if (validNotes.length > 0) {
+          matchText += `
+- Feedback Notes: ${validNotes.map((n: string) => `"${n.trim()}"`).join('; ')}`;
+        }
+      }
+
+      // Show price comparison if we have both quoted and actual
+      if (actualPricesUsed.length > 0 && quotedPrice) {
+        const avgActual = actualPricesUsed.reduce((a: number, b: number) => a + b, 0) / actualPricesUsed.length;
+        const quotedNum = toNumberOrNull(quotedPrice);
+        if (quotedNum && avgActual) {
+          const diff = ((avgActual - quotedNum) / quotedNum * 100).toFixed(1);
+          const diffLabel = avgActual > quotedNum ? 'higher' : 'lower';
+          matchText += `
+- Price Adjustment: Actual was ${Math.abs(parseFloat(diff))}% ${diffLabel} than AI suggested`;
+        }
+      }
     }
 
     if (q.specialRequirements || q.special_requirements) {

@@ -114,17 +114,18 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
   }) => {
     if (!isOpen) return null;
 
+    const confidencePct = quote.ai_confidence_percentage ?? 0;
     const confidenceColor =
-      quote.ai_confidence === 'high'
+      confidencePct >= 80
         ? 'text-green-700'
-        : quote.ai_confidence === 'medium'
+        : confidencePct >= 60
           ? 'text-yellow-700'
           : 'text-red-700';
 
     const confidenceBg =
-      quote.ai_confidence === 'high'
+      confidencePct >= 80
         ? 'bg-green-100'
-        : quote.ai_confidence === 'medium'
+        : confidencePct >= 60
           ? 'bg-yellow-100'
           : 'bg-red-100';
 
@@ -173,12 +174,11 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
               <p className="text-3xl font-bold text-blue-700">
                 {formatPrice(quote.ai_recommended_price)}
               </p>
-              {quote.ai_confidence && (
+              {quote.ai_confidence_percentage !== null && (
                 <span
                   className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold ${confidenceBg} ${confidenceColor}`}
                 >
-                  {quote.ai_confidence.charAt(0).toUpperCase() + quote.ai_confidence.slice(1)}{' '}
-                  Confidence
+                  {quote.ai_confidence_percentage}% Confidence
                 </span>
               )}
             </div>

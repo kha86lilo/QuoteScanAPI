@@ -9,6 +9,10 @@ export async function GET(request: Request) {
   const offset = parseInt(searchParams.get('offset') || '0');
   const page = parseInt(searchParams.get('page') || '1');
 
+  // Service type filter - comma-separated list of service types to include
+  const serviceFilter = searchParams.get('services');
+  const serviceTypes = serviceFilter ? serviceFilter.split(',').map(s => s.trim().toUpperCase()).filter(Boolean) : [];
+
   // Calculate offset from page if page is provided
   const calculatedOffset = searchParams.has('page') ? (page - 1) * limit : offset;
 
@@ -42,6 +46,18 @@ export async function GET(request: Request) {
       paramIndex++;
     }
 
+    // Service type filter - only include emails with quotes matching these service types
+    let serviceFilterClause = '';
+    if (serviceTypes.length > 0) {
+      serviceFilterClause = `AND EXISTS (
+        SELECT 1 FROM shipping_quotes sq
+        WHERE sq.email_id = e.email_id
+        AND UPPER(sq.service_type) = ANY($${paramIndex}::text[])
+      )`;
+      params.push(serviceTypes);
+      paramIndex++;
+    }
+
     const result = await client.query(
       `SELECT
         e.*,
@@ -51,6 +67,7 @@ export async function GET(request: Request) {
       WHERE e.email_received_date >= $3
         ${ignoredEmailsClause}
         ${ignoredServicesClause}
+        ${serviceFilterClause}
       GROUP BY e.email_id
       ORDER BY e.email_received_date DESC
       LIMIT $1 OFFSET $2`,
@@ -79,15 +96,45 @@ export async function GET(request: Request) {
       countParamIndex++;
     }
 
+    let countServiceFilterClause = '';
+    if (serviceTypes.length > 0) {
+      countServiceFilterClause = `AND EXISTS (
+        SELECT 1 FROM shipping_quotes sq
+        WHERE sq.email_id = shipping_emails.email_id
+        AND UPPER(sq.service_type) = ANY($${countParamIndex}::text[])
+      )`;
+      countParams.push(serviceTypes);
+      countParamIndex++;
+    }
+
     const countResult = await client.query(
       `SELECT COUNT(*) FROM shipping_emails
        WHERE email_received_date >= $1
          ${countIgnoredEmailsClause}
-         ${countIgnoredServicesClause}`,
+         ${countIgnoredServicesClause}
+         ${countServiceFilterClause}`,
       countParams
     );
     const totalCount = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalCount / limit);
+
+    // Fetch available service types for the filter dropdown (excluding ignored services)
+    const serviceTypesParams: string[] = [];
+    let serviceTypesQuery = `SELECT DISTINCT UPPER(service_type) as service_type, COUNT(*) as count
+       FROM shipping_quotes
+       WHERE service_type IS NOT NULL AND service_type != ''`;
+
+    if (ignoredServices.length > 0) {
+      serviceTypesQuery += ` AND UPPER(service_type) != ALL($1::text[])`;
+      serviceTypesParams.push(...ignoredServices.map(s => s.toUpperCase()));
+    }
+
+    serviceTypesQuery += ` GROUP BY UPPER(service_type) ORDER BY count DESC`;
+
+    const serviceTypesResult = await client.query(
+      serviceTypesQuery,
+      ignoredServices.length > 0 ? [serviceTypesParams] : []
+    );
 
     return NextResponse.json({
       emails: result.rows,
@@ -97,6 +144,8 @@ export async function GET(request: Request) {
       limit,
       offset: calculatedOffset,
       minDate: config.MIN_EMAIL_DATE,
+      availableServiceTypes: serviceTypesResult.rows.map(r => r.service_type),
+      activeServiceFilter: serviceTypes,
     });
   } catch (error) {
     console.error('Error fetching emails:', error);

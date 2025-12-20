@@ -711,7 +711,7 @@ Return complete, accurate JSON following this structure exactly.`;
     // PRICING LOGIC: Use BEST MATCH as primary, with confidence-based adjustments
     // This approach achieved 37.9% accuracy in testing - best of all approaches
     let recommendedPrice: number;
-    let confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+    let confidencePercentage: number;
 
     const sortedForAnchors = [...prices].sort((a, b) => a - b);
     const q1 = sortedForAnchors[Math.floor((sortedForAnchors.length - 1) * 0.25)] ?? sortedForAnchors[0] ?? bestPrice;
@@ -743,11 +743,11 @@ Return complete, accurate JSON following this structure exactly.`;
         }
         const anchorWeight = 1 - bestWeight;
         recommendedPrice = Math.round((bestPrice * bestWeight) + (lowerQuartileAnchor * anchorWeight));
-        confidence = 'MEDIUM';
+        confidencePercentage = 65;
         console.log(`  HIGH similarity w/ HIGH spread - ${Math.round(bestWeight * 100)}/${Math.round(anchorWeight * 100)} toward lower anchor: $${recommendedPrice.toLocaleString()}`);
       } else {
         recommendedPrice = bestPrice;
-        confidence = 'HIGH';
+        confidencePercentage = 85;
         console.log(`  HIGH similarity (${(bestScore * 100).toFixed(0)}%) - using best match: $${recommendedPrice.toLocaleString()}`);
       }
     } else if (bestScore >= 0.60) {
@@ -758,17 +758,17 @@ Return complete, accurate JSON following this structure exactly.`;
           : 0.5;
         const anchorWeight = 1 - bestWeight;
         recommendedPrice = Math.round((bestPrice * bestWeight) + (lowerQuartileAnchor * anchorWeight));
-        confidence = 'MEDIUM';
+        confidencePercentage = 55;
         console.log(`  MEDIUM similarity w/ HIGH spread - ${Math.round(bestWeight * 100)}/${Math.round(anchorWeight * 100)} to lower anchor: $${recommendedPrice.toLocaleString()}`);
       } else {
         recommendedPrice = Math.round((bestPrice * 0.7) + (adjustedWeightedAvg * 0.3));
-        confidence = 'MEDIUM';
+        confidencePercentage = 60;
         console.log(`  MEDIUM similarity - 70/30 blend: $${recommendedPrice.toLocaleString()}`);
       }
     } else {
       // Lower similarity - use baseline as more stable
       recommendedPrice = adjustedWeightedAvg;
-      confidence = 'LOW';
+      confidencePercentage = 40;
       console.log(`  LOW similarity - using weighted avg: $${recommendedPrice.toLocaleString()}`);
     }
 
@@ -797,7 +797,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const oceanOnlyEstimate = Math.max(1600, Math.round(bestPrice * factor));
         if (oceanOnlyEstimate < recommendedPrice) {
           recommendedPrice = oceanOnlyEstimate;
-          confidence = 'LOW';
+          confidencePercentage = 35;
           ignoreHistoricalSoftBounds = true;
           console.log(`  Ocean-only reefer guard: ${(factor * 100).toFixed(0)}% of best match → $${recommendedPrice.toLocaleString()}`);
         }
@@ -812,7 +812,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const oceanOnlyEstimate = Math.max(1200, Math.round(bestPrice * factor));
         if (oceanOnlyEstimate < recommendedPrice) {
           recommendedPrice = oceanOnlyEstimate;
-          confidence = 'LOW';
+          confidencePercentage = 35;
           ignoreHistoricalSoftBounds = true;
           console.log(`  Ocean-only container guard: ${(factor * 100).toFixed(0)}% of best match → $${recommendedPrice.toLocaleString()}`);
         }
@@ -831,7 +831,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const oceanOnlyEstimate = Math.max(1200, Math.round(bestPrice * factor));
         if (oceanOnlyEstimate < recommendedPrice) {
           recommendedPrice = oceanOnlyEstimate;
-          confidence = 'LOW';
+          confidencePercentage = 35;
           ignoreHistoricalSoftBounds = true;
           console.log(`  Ocean-only contamination guard: ${(factor * 100).toFixed(0)}% of best match → $${recommendedPrice.toLocaleString()}`);
         }
@@ -842,7 +842,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const biased = Math.round((recommendedPrice * 0.5) + (q1 * 0.5));
         if (biased < recommendedPrice) {
           recommendedPrice = biased;
-          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          if (confidencePercentage > 70) confidencePercentage = 60;
           console.log(`  Ocean-like down-bias toward Q1 ($${q1.toLocaleString()}): $${recommendedPrice.toLocaleString()}`);
         }
       }
@@ -860,7 +860,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const oceanOnlyEstimate = Math.max(1600, Math.round(bestPrice * factor));
         if (oceanOnlyEstimate < recommendedPrice) {
           recommendedPrice = oceanOnlyEstimate;
-          confidence = 'LOW';
+          confidencePercentage = 35;
           ignoreHistoricalSoftBounds = true;
           console.log(`  Ocean-only reefer guard (fallback): ${(factor * 100).toFixed(0)}% of best match → $${recommendedPrice.toLocaleString()}`);
         }
@@ -883,7 +883,7 @@ Return complete, accurate JSON following this structure exactly.`;
     if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
       const fallback = Number.isFinite(bestPrice) && bestPrice > 0 ? bestPrice : (adjustedWeightedAvg || weightedAvg);
       recommendedPrice = Math.round(fallback);
-      confidence = 'LOW';
+      confidencePercentage = 35;
       console.log(`  Pricing guard: non-finite recommendation; fallback → $${recommendedPrice.toLocaleString()}`);
     }
 
@@ -906,7 +906,7 @@ Return complete, accurate JSON following this structure exactly.`;
     if (internationalOceanLike && !ignoreHistoricalSoftBounds && cargoIsUnknown && !oversizeForPricing && !isHazmat && !isGround && !isDrayage) {
       const intlDiscount = 0.70;
       recommendedPrice = Math.round(recommendedPrice * intlDiscount);
-      confidence = 'LOW';
+      confidencePercentage = 35;
       console.log(`  International ocean-like unknown-cargo discount: x${intlDiscount} → $${recommendedPrice.toLocaleString()}`);
     }
 
@@ -925,7 +925,7 @@ Return complete, accurate JSON following this structure exactly.`;
       if (hasContainerSignal) {
         const containerDiscount = 0.70;
         recommendedPrice = Math.round(recommendedPrice * containerDiscount);
-        confidence = 'LOW';
+        confidencePercentage = 35;
         console.log(`  International container/reefer discount: x${containerDiscount} → $${recommendedPrice.toLocaleString()}`);
       }
     }
@@ -933,7 +933,7 @@ Return complete, accurate JSON following this structure exactly.`;
     if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
       const fallback = Number.isFinite(bestPrice) && bestPrice > 0 ? bestPrice : (adjustedWeightedAvg || weightedAvg);
       recommendedPrice = Math.round(fallback);
-      confidence = 'LOW';
+      confidencePercentage = 35;
       console.log(`  Pricing guard (post-multiplier): fallback → $${recommendedPrice.toLocaleString()}`);
     }
 
@@ -955,7 +955,7 @@ Return complete, accurate JSON following this structure exactly.`;
     if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
       const fallback = Number.isFinite(bestPrice) && bestPrice > 0 ? bestPrice : (adjustedWeightedAvg || weightedAvg);
       recommendedPrice = Math.round(fallback);
-      confidence = 'LOW';
+      confidencePercentage = 35;
       console.log(`  Pricing guard (post-hazmat): fallback → $${recommendedPrice.toLocaleString()}`);
     }
 
@@ -965,7 +965,7 @@ Return complete, accurate JSON following this structure exactly.`;
       if (sourceContainerCount >= 3) {
         const mult = sourceContainerCount >= 5 ? 1.35 : 1.25;
         recommendedPrice = Math.round(recommendedPrice * mult);
-        if (confidence === 'HIGH') confidence = 'MEDIUM';
+        if (confidencePercentage > 70) confidencePercentage = 60;
         console.log(`  Multi-container drayage multiplier (${sourceContainerCount}): x${mult} → $${recommendedPrice.toLocaleString()}`);
       }
     }
@@ -1009,7 +1009,7 @@ Return complete, accurate JSON following this structure exactly.`;
       // Only cap when history is clearly in the low band (avoid capping legitimate OSOW moves).
       if (baseline > 0 && baseline <= 2000 && recommendedPrice > baseline * 1.30) {
         recommendedPrice = Math.round(baseline * 1.05);
-        if (confidence === 'HIGH') confidence = 'MEDIUM';
+        if (confidencePercentage > 70) confidencePercentage = 60;
         console.log(`  Short-haul equipment cap (ground): baseline $${baseline.toLocaleString()} → $${recommendedPrice.toLocaleString()}`);
       }
     }
@@ -1044,7 +1044,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const upliftFloor = Math.round(Math.max(3500, Math.min(5200, maxPrice * 0.60)));
         if (recommendedPrice < upliftFloor) {
           recommendedPrice = upliftFloor;
-          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          if (confidencePercentage > 70) confidencePercentage = 60;
           console.log(`  Missing-data high-spread uplift (ground): $${upliftFloor.toLocaleString()}`);
         }
         softCeiling = Math.max(softCeiling, 9000);
@@ -1100,7 +1100,7 @@ Return complete, accurate JSON following this structure exactly.`;
         if (pieces >= 2) floor += 400;
         if (recommendedPrice < floor) {
           recommendedPrice = floor;
-          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          if (confidencePercentage > 70) confidencePercentage = 60;
           console.log(`  Roll-off truck floor (ground): $${floor.toLocaleString()}`);
         }
         softCeiling = Math.max(softCeiling, 12000);
@@ -1117,7 +1117,7 @@ Return complete, accurate JSON following this structure exactly.`;
         else if (distanceMiles >= 250) floor = 4200;
         if (recommendedPrice < floor) {
           recommendedPrice = floor;
-          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          if (confidencePercentage > 70) confidencePercentage = 60;
           console.log(`  Extreme overweight floor (ground): $${floor.toLocaleString()}`);
         }
         softCeiling = Math.max(softCeiling, 12000);
@@ -1129,7 +1129,7 @@ Return complete, accurate JSON following this structure exactly.`;
         const floor = Math.round(distanceMiles * 3.5 + 200);
         if (recommendedPrice < floor) {
           recommendedPrice = floor;
-          if (confidence === 'HIGH') confidence = 'MEDIUM';
+          if (confidencePercentage > 70) confidencePercentage = 60;
           console.log(`  Long-haul ground low-anchor floor: $${floor.toLocaleString()}`);
         }
       }
@@ -1268,7 +1268,7 @@ Return complete, accurate JSON following this structure exactly.`;
       floor_price: softFloor,
       target_price: bestPrice,
       ceiling_price: softCeiling,
-      confidence,
+      confidence_percentage: confidencePercentage,
       price_breakdown: {
         linehaul: Math.round(recommendedPrice * 0.70),
         fuel_surcharge: Math.round(recommendedPrice * 0.15),
@@ -1277,10 +1277,10 @@ Return complete, accurate JSON following this structure exactly.`;
       },
       reasoning: `Best match: ${(bestScore * 100).toFixed(0)}% similar at $${bestPrice.toLocaleString()}. Top 3 range: $${minPrice.toLocaleString()}-$${maxPrice.toLocaleString()}.`,
       market_factors: ['Best match pricing', effectiveServiceType, `${distanceMiles} miles`],
-      negotiation_room_percent: confidence === 'HIGH' ? 10 : 15,
+      negotiation_room_percent: confidencePercentage >= 70 ? 10 : 15,
     };
-    
-    console.log(`  Recommended: $${recommendedPrice.toLocaleString()} (${confidence} confidence)`);
+
+    console.log(`  Recommended: $${recommendedPrice.toLocaleString()} (${confidencePercentage}% confidence)`);
     return result;
   }
 
@@ -1537,7 +1537,7 @@ Return ONLY valid JSON:
   "floor_price": ${promptBaseline > 0 ? Math.round(promptBaseline * 0.85) : 0},
   "target_price": ${promptBaseline > 0 ? promptBaseline : 0},
   "ceiling_price": ${promptBaseline > 0 ? Math.round(promptBaseline * 1.15) : 0},
-  "confidence": "HIGH|MEDIUM|LOW",
+  "confidence_percentage": 75,
   "price_breakdown": {
     "linehaul": 0.00,
     "fuel_surcharge": 0.00,

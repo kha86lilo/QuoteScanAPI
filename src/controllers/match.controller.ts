@@ -731,12 +731,8 @@ async function processExtractAndMatchJob(
           try {
             await recordPricingOutcome(detail.quoteId, {
               suggestedPrice: detail.suggestedPrice ?? undefined,
-              priceConfidence: detail.aiPricing
-                ? detail.aiPricing.confidence === 'HIGH'
-                  ? 0.9
-                  : detail.aiPricing.confidence === 'MEDIUM'
-                    ? 0.7
-                    : 0.5
+              priceConfidence: detail.aiPricing?.confidence_percentage
+                ? detail.aiPricing.confidence_percentage / 100
                 : detail.priceRange
                   ? 0.7
                   : 0.5,
@@ -883,7 +879,7 @@ export const recordOutcome = asyncHandler(async (req: Request, res: Response) =>
 export const runAllMatching = asyncHandler(async (req: Request, res: Response) => {
   const {
     startDate,
-    minScore = 0.65,
+    minScore = 0.5,
     maxMatches = 10,
     useAI = true,
     limit = 1000,
@@ -998,12 +994,8 @@ async function processRunAllMatchingJob(
         try {
           await recordPricingOutcome(detail.quoteId, {
             suggestedPrice: detail.suggestedPrice ?? undefined,
-            priceConfidence: detail.aiPricing
-              ? detail.aiPricing.confidence === 'HIGH'
-                ? 0.9
-                : detail.aiPricing.confidence === 'MEDIUM'
-                  ? 0.7
-                  : 0.5
+            priceConfidence: detail.aiPricing?.confidence_percentage
+              ? detail.aiPricing.confidence_percentage / 100
               : detail.priceRange
                 ? 0.7
                 : 0.5,

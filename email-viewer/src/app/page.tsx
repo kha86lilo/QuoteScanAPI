@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ShippingEmail, EmailWithQuotes, PaginatedEmailsResponse } from '@/types';
 import EmailList from '@/components/EmailList';
 import EmailDetails from '@/components/EmailDetails';
-import { Mail, RefreshCw, LayoutDashboard } from 'lucide-react';
+import { Mail, RefreshCw, LayoutDashboard, Filter, X, Search } from 'lucide-react';
 import Dashboard from '@/components/Dashboard';
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -23,12 +23,17 @@ export default function Home() {
     limit: DEFAULT_PAGE_SIZE,
   });
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+  const [availableServiceTypes, setAvailableServiceTypes] = useState<string[]>([]);
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [serviceSearchQuery, setServiceSearchQuery] = useState('');
 
-  const fetchEmails = useCallback(async (page: number = 1) => {
+  const fetchEmails = useCallback(async (page: number = 1, services: string[] = selectedServices) => {
     setIsLoadingList(true);
     setError(null);
     try {
-      const response = await fetch(`/api/emails?page=${page}&limit=${DEFAULT_PAGE_SIZE}`);
+      const servicesParam = services.length > 0 ? `&services=${services.join(',')}` : '';
+      const response = await fetch(`/api/emails?page=${page}&limit=${DEFAULT_PAGE_SIZE}${servicesParam}`);
       if (!response.ok) throw new Error('Failed to fetch emails');
       const data: PaginatedEmailsResponse = await response.json();
       setEmails(data.emails);
@@ -38,12 +43,13 @@ export default function Home() {
         totalCount: data.totalCount,
         limit: data.limit,
       });
+      setAvailableServiceTypes(data.availableServiceTypes || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load emails');
     } finally {
       setIsLoadingList(false);
     }
-  }, []);
+  }, [selectedServices]);
 
   const fetchEmailDetails = useCallback(async (emailId: number) => {
     setIsLoadingDetails(true);
@@ -79,7 +85,24 @@ export default function Home() {
   const handlePageChange = (page: number) => {
     setSelectedEmailId(null);
     setSelectedEmail(null);
-    fetchEmails(page);
+    fetchEmails(page, selectedServices);
+  };
+
+  const handleServiceToggle = (service: string) => {
+    const newServices = selectedServices.includes(service)
+      ? selectedServices.filter(s => s !== service)
+      : [...selectedServices, service];
+    setSelectedServices(newServices);
+    setSelectedEmailId(null);
+    setSelectedEmail(null);
+    fetchEmails(1, newServices);
+  };
+
+  const handleClearFilters = () => {
+    setSelectedServices([]);
+    setSelectedEmailId(null);
+    setSelectedEmail(null);
+    fetchEmails(1, []);
   };
 
   const handleFeedbackSubmit = async (
@@ -118,6 +141,103 @@ export default function Home() {
           <h1 className="text-lg font-semibold">Shipping Emails</h1>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <button
+              onClick={() => setIsFilterOpen(!isFilterOpen)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded transition-colors ${
+                selectedServices.length > 0
+                  ? 'bg-white text-outlook-blue'
+                  : 'bg-white/10 hover:bg-white/20'
+              }`}
+            >
+              <Filter className="w-4 h-4" />
+              Filter
+              {selectedServices.length > 0 && (
+                <span className="bg-outlook-blue text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+                  {selectedServices.length}
+                </span>
+              )}
+            </button>
+            {isFilterOpen && (
+              <div className="absolute right-0 top-full mt-2 bg-white rounded-lg shadow-xl border border-gray-200 min-w-[280px] z-50">
+                <div className="p-3 border-b border-gray-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium text-gray-900 text-sm">Filter by Service</span>
+                    {selectedServices.length > 0 && (
+                      <button
+                        onClick={handleClearFilters}
+                        className="text-xs text-outlook-blue hover:underline"
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search services..."
+                      value={serviceSearchQuery}
+                      onChange={(e) => setServiceSearchQuery(e.target.value)}
+                      className="w-full text-black pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-outlook-blue focus:border-outlook-blue"
+                      autoFocus
+                    />
+                    {serviceSearchQuery && (
+                      <button
+                        onClick={() => setServiceSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="max-h-[300px] overflow-y-auto p-2">
+                  {availableServiceTypes.length === 0 ? (
+                    <p className="text-sm text-gray-500 p-2">No service types available</p>
+                  ) : (
+                    (() => {
+                      const filteredServices = availableServiceTypes.filter(service =>
+                        service.toLowerCase().includes(serviceSearchQuery.toLowerCase())
+                      );
+                      if (filteredServices.length === 0) {
+                        return (
+                          <p className="text-sm text-gray-500 p-2">
+                            No services match &quot;{serviceSearchQuery}&quot;
+                          </p>
+                        );
+                      }
+                      return filteredServices.map(service => (
+                        <label
+                          key={service}
+                          className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedServices.includes(service)}
+                            onChange={() => handleServiceToggle(service)}
+                            className="rounded border-gray-300 text-outlook-blue focus:ring-outlook-blue"
+                          />
+                          <span className="text-sm text-gray-700">{service}</span>
+                        </label>
+                      ));
+                    })()
+                  )}
+                </div>
+                <div className="p-2 border-t border-gray-100">
+                  <button
+                    onClick={() => {
+                      setIsFilterOpen(false);
+                      setServiceSearchQuery('');
+                    }}
+                    className="w-full text-center text-sm text-gray-600 hover:text-gray-900 py-1"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <button
             onClick={() => setIsDashboardOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded hover:bg-white/20 transition-colors"
@@ -126,7 +246,7 @@ export default function Home() {
             Dashboard
           </button>
           <button
-            onClick={() => fetchEmails(pagination.currentPage)}
+            onClick={() => fetchEmails(pagination.currentPage, selectedServices)}
             disabled={isLoadingList}
             className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded hover:bg-white/20 transition-colors disabled:opacity-50"
           >
@@ -135,6 +255,33 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* Active Filters Bar */}
+      {selectedServices.length > 0 && (
+        <div className="bg-blue-50 border-b border-blue-100 px-6 py-2 flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-blue-700 font-medium">Filtered by:</span>
+          {selectedServices.map(service => (
+            <span
+              key={service}
+              className="inline-flex items-center gap-1 bg-white border border-blue-200 text-blue-800 text-xs px-2 py-1 rounded-full"
+            >
+              {service}
+              <button
+                onClick={() => handleServiceToggle(service)}
+                className="hover:bg-blue-100 rounded-full p-0.5"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+          <button
+            onClick={handleClearFilters}
+            className="text-xs text-blue-600 hover:text-blue-800 hover:underline ml-2"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">

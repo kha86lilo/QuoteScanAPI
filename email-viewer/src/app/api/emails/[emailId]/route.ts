@@ -43,7 +43,7 @@ export async function GET(
         apr.id as ai_price_id,
         apr.ai_recommended_price,
         apr.ai_reasoning,
-        apr.confidence as ai_confidence,
+        apr.confidence_percentage as ai_confidence_percentage,
         apr.floor_price,
         apr.ceiling_price,
         apr.target_price,
