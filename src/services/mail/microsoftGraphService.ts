@@ -247,32 +247,39 @@ class MicrosoftGraphService {
 
     // Fetch emails for each sender name
     for (const senderName of senderNames) {
-      const params: Record<string, string | number> = {
-        $top: 1000,
-        $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
-        $filter: `contains(from/emailAddress/name, '${senderName}')`,
-      };
+      for (const conversationId of conversationIdSet) {
+        const params: Record<string, string | number> = {
+          $top: 1000,
+          $select: 'id,conversationId,subject,from,receivedDateTime,bodyPreview,hasAttachments',
+          $filter: `conversationid eq '${conversationId}' and contains(from/emailAddress/name, '${senderName}')`,
+        };
 
-      try {
-        const response = await axios.get<GraphApiResponse<Email>>(baseUrl, { headers, params });
-        const emails = response.data.value || [];
+        try {
+          const response = await axios.get<GraphApiResponse<Email>>(baseUrl, { headers, params });
+          const emails = response.data.value || [];
 
-        // Filter by conversation IDs client-side
-        const matchingEmails = emails.filter(
-          (email: Email) => email.conversationId && conversationIdSet.has(email.conversationId)
-        );
+          // Filter by conversation IDs client-side
+          const matchingEmails = emails.filter(
+            (email: Email) => email.conversationId && conversationIdSet.has(email.conversationId)
+          );
 
-        allEmails.push(...matchingEmails);
-      } catch (error) {
-        const err = error as { response?: { data?: unknown }; message?: string };
-        console.error(`Error fetching emails for sender ${senderName}:`, err.response?.data || err.message);
+          allEmails.push(...matchingEmails);
+        } catch (error) {
+          const err = error as { response?: { data?: unknown }; message?: string };
+          console.error(
+            `Error fetching emails for sender ${senderName}:`,
+            err.response?.data || err.message
+          );
+        }
       }
     }
 
     // Remove duplicates by email ID
-    const uniqueEmails = Array.from(new Map(allEmails.map(e => [e.id, e])).values());
+    const uniqueEmails = Array.from(new Map(allEmails.map((e) => [e.id, e])).values());
 
-    console.log(`Success: Fetched ${uniqueEmails.length} emails matching ${conversationIds.length} conversations`);
+    console.log(
+      `Success: Fetched ${uniqueEmails.length} emails matching ${conversationIds.length} conversations`
+    );
     return uniqueEmails;
   }
 }
@@ -282,4 +289,5 @@ export default microsoftGraphService;
 export const getAccessToken = microsoftGraphService.getAccessToken.bind(microsoftGraphService);
 export const fetchEmails = microsoftGraphService.fetchEmails.bind(microsoftGraphService);
 export const advancedEmailSearch = microsoftGraphService.advancedSearch.bind(microsoftGraphService);
-export const fetchEmailsByConversationIds = microsoftGraphService.fetchEmailsByConversationIds.bind(microsoftGraphService);
+export const fetchEmailsByConversationIds =
+  microsoftGraphService.fetchEmailsByConversationIds.bind(microsoftGraphService);

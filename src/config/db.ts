@@ -1386,15 +1386,22 @@ async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
 
 /**
  * Get all conversation IDs from shipping_emails
+ * @param startDate - Optional date to filter conversations by received_date
  */
-async function getConversationIds(): Promise<string[]> {
+async function getConversationIds(startDate?: string | null): Promise<string[]> {
   const client = await pool.connect();
   try {
-    const result = await client.query(
-      `SELECT DISTINCT conversation_id
+    let query = `SELECT DISTINCT conversation_id
        FROM shipping_emails
-       WHERE conversation_id IS NOT NULL`
-    );
+       WHERE conversation_id IS NOT NULL`;
+    const params: string[] = [];
+
+    if (startDate) {
+      params.push(startDate);
+      query += ` AND email_received_date >= $1`;
+    }
+
+    const result = await client.query(query, params);
 
     return result.rows.map(row => row.conversation_id);
   } finally {

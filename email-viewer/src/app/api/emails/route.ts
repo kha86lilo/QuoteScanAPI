@@ -58,6 +58,23 @@ export async function GET(request: Request) {
       paramIndex++;
     }
 
+    // Exclude emails that have feedback on their quotes
+    const noFeedbackClause = `AND NOT EXISTS (
+      SELECT 1 FROM shipping_quotes sq
+      INNER JOIN ai_pricing_recommendations apr ON apr.quote_id = sq.quote_id
+      INNER JOIN quote_ai_price_feedback f ON f.ai_price_id = apr.id
+      WHERE sq.email_id = e.email_id
+    )`;
+
+    // Exclude emails that have priced staff quote replies
+    const noPricedStaffQuoteClause = `AND NOT EXISTS (
+      SELECT 1 FROM staff_replies sr
+      INNER JOIN staff_quotes_replies sqr ON sqr.staff_reply_id = sr.reply_id
+      WHERE sr.original_email_id = e.email_id
+      AND sqr.is_pricing_email = true
+      AND sqr.quoted_price IS NOT NULL
+    )`;
+
     const result = await client.query(
       `SELECT
         e.*,
@@ -68,6 +85,8 @@ export async function GET(request: Request) {
         ${ignoredEmailsClause}
         ${ignoredServicesClause}
         ${serviceFilterClause}
+        ${noFeedbackClause}
+        ${noPricedStaffQuoteClause}
       GROUP BY e.email_id
       ORDER BY e.email_received_date DESC
       LIMIT $1 OFFSET $2`,
@@ -107,12 +126,31 @@ export async function GET(request: Request) {
       countParamIndex++;
     }
 
+    // Exclude emails that have feedback on their quotes (for count)
+    const countNoFeedbackClause = `AND NOT EXISTS (
+      SELECT 1 FROM shipping_quotes sq
+      INNER JOIN ai_pricing_recommendations apr ON apr.quote_id = sq.quote_id
+      INNER JOIN quote_ai_price_feedback f ON f.ai_price_id = apr.id
+      WHERE sq.email_id = shipping_emails.email_id
+    )`;
+
+    // Exclude emails that have priced staff quote replies (for count)
+    const countNoPricedStaffQuoteClause = `AND NOT EXISTS (
+      SELECT 1 FROM staff_replies sr
+      INNER JOIN staff_quotes_replies sqr ON sqr.staff_reply_id = sr.reply_id
+      WHERE sr.original_email_id = shipping_emails.email_id
+      AND sqr.is_pricing_email = true
+      AND sqr.quoted_price IS NOT NULL
+    )`;
+
     const countResult = await client.query(
       `SELECT COUNT(*) FROM shipping_emails
        WHERE email_received_date >= $1
          ${countIgnoredEmailsClause}
          ${countIgnoredServicesClause}
-         ${countServiceFilterClause}`,
+         ${countServiceFilterClause}
+         ${countNoFeedbackClause}
+         ${countNoPricedStaffQuoteClause}`,
       countParams
     );
     const totalCount = parseInt(countResult.rows[0].count);

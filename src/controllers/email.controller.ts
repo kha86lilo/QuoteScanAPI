@@ -207,6 +207,7 @@ const STAFF_SENDER_NAMES = ['danny nasser', 'tina merkab', 'seahorse express'];
 
 interface ExtractRepliesBody {
   senderNames?: string[];
+  startDate?: string | null;
 }
 
 /**
@@ -217,11 +218,11 @@ interface ExtractRepliesBody {
  * 4. Saves to staff_replies table
  */
 export const extractReplies = asyncHandler(async (req: Request, res: Response) => {
-  const { senderNames = STAFF_SENDER_NAMES } = req.body as ExtractRepliesBody;
+  const { senderNames = STAFF_SENDER_NAMES, startDate = null } = req.body as ExtractRepliesBody;
 
   // Step 1: Get all conversation IDs from shipping_emails
-  console.log(`Searching for conversations, filtering by senders: ${senderNames.join(', ')}`);
-  const conversationIds = await getConversationIds();
+  console.log(`Searching for conversations, filtering by senders: ${senderNames.join(', ')}${startDate ? `, startDate: ${startDate}` : ''}`);
+  const conversationIds = await getConversationIds(startDate);
 
   if (conversationIds.length === 0) {
     return res.json({
