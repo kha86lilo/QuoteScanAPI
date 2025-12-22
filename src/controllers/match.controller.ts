@@ -35,6 +35,7 @@ import type {
   MatchingOptions,
   LearningResult,
 } from '../types/index.js';
+import * as emailController from './email.controller.js';
 
 // Valid feedback reasons for validation
 const VALID_FEEDBACK_REASONS: FeedbackReason[] = [
@@ -495,6 +496,10 @@ export const extractAndMatch = asyncHandler(async (req: Request, res: Response) 
       scoreThreshold,
     });
 
+    // Extract staff replies and process staff quotes
+    const extractRepliesResult = await emailController.extractRepliesInternal({ startDate });
+    const processStaffQuotesResult = await emailController.processStaffQuotesInternal({});
+
     let matchingResults: MatchResult = {
       processed: 0,
       matchesCreated: 0,
@@ -520,6 +525,8 @@ export const extractAndMatch = asyncHandler(async (req: Request, res: Response) 
           processed: extractionResults.processed,
           newQuoteIds: extractionResults.newQuoteIds,
         },
+        staffReplies: extractRepliesResult,
+        staffQuotes: processStaffQuotesResult,
         matching: {
           quotesProcessed: matchingResults.processed,
           matchesCreated: matchingResults.matchesCreated,
@@ -710,6 +717,12 @@ async function processExtractAndMatchJob(
       scoreThreshold: jobData.scoreThreshold,
     });
 
+    // Extract staff replies and process staff quotes
+    const extractRepliesResult = await emailController.extractRepliesInternal({
+      startDate: jobData.startDate,
+    });
+    const processStaffQuotesResult = await emailController.processStaffQuotesInternal({});
+
     let matchingResults: MatchResult = {
       processed: 0,
       matchesCreated: 0,
@@ -774,6 +787,8 @@ async function processExtractAndMatchJob(
           newQuoteIds: extractionResults.newQuoteIds,
           lastReceivedDateTime: extractionResults.lastReceivedDateTime,
         },
+        staffReplies: extractRepliesResult,
+        staffQuotes: processStaffQuotesResult,
         matching: {
           processed: matchingResults.processed,
           quotesProcessed: matchingResults.processed,

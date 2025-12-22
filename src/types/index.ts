@@ -239,6 +239,20 @@ export interface JobData {
   matchingOptions?: MatchingOptions;
 }
 
+export interface StaffRepliesResult {
+  conversationsFound: number;
+  repliesFetched: number;
+  repliesSaved: number;
+}
+
+export interface StaffQuotesResult {
+  processed: number;
+  pricingEmails: number;
+  nonPricingEmails: number;
+  failed: number;
+  errors: { replyId: number; subject?: string; error: string }[];
+}
+
 export interface JobResult {
   fetched?: number;
   filtered?: FilteredResults;
@@ -251,6 +265,8 @@ export interface JobResult {
   preview?: FilterPreview;
   summary?: ProcessingSummary;
   extraction?: ExtractionResult;
+  staffReplies?: StaffRepliesResult;
+  staffQuotes?: StaffQuotesResult;
   matching?: MatchingResult;
   learning?: LearningResult | null;
 }

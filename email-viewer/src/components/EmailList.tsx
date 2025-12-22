@@ -124,13 +124,22 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
           <p className="text-xs text-outlook-textLight truncate">
             {email.email_body_preview || 'No preview available'}
           </p>
-          {(email as any).quote_count > 0 && (
-            <div className="mt-1">
+          <div className="mt-1 flex items-center gap-2 flex-wrap">
+            {(email as any).quote_count > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
                 {(email as any).quote_count} quote{(email as any).quote_count > 1 ? 's' : ''}
               </span>
-            </div>
-          )}
+            )}
+            {email.ai_confidence_score !== null && email.ai_confidence_score !== undefined && (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                email.ai_confidence_score >= 0.8 ? 'bg-green-100 text-green-800' :
+                email.ai_confidence_score >= 0.5 ? 'bg-yellow-100 text-yellow-800' :
+                'bg-red-100 text-red-800'
+              }`}>
+                {Math.round(email.ai_confidence_score * 100)}% conf
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -204,18 +213,34 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
                     <p className="text-xs text-outlook-textLight truncate">
                       {thread.latestEmail.email_body_preview || 'No preview available'}
                     </p>
-                    {thread.emails.some(e => (e as any).quote_count > 0) && (
-                      <div className="mt-1">
-                        {(() => {
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      {thread.emails.some(e => (e as any).quote_count > 0) && (
+                        (() => {
                           const totalQuotes = thread.emails.reduce((sum, e) => sum + (Number((e as any).quote_count) || 0), 0);
                           return (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
                               {totalQuotes} quote{totalQuotes > 1 ? 's' : ''}
                             </span>
                           );
-                        })()}
-                      </div>
-                    )}
+                        })()
+                      )}
+                      {(() => {
+                        const confidenceScores = thread.emails
+                          .map(e => e.ai_confidence_score)
+                          .filter((score): score is number => score !== null && score !== undefined);
+                        if (confidenceScores.length === 0) return null;
+                        const avgConfidence = confidenceScores.reduce((sum, s) => sum + s, 0) / confidenceScores.length;
+                        return (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                            avgConfidence >= 0.8 ? 'bg-green-100 text-green-800' :
+                            avgConfidence >= 0.5 ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-red-100 text-red-800'
+                          }`}>
+                            {Math.round(avgConfidence * 100)}% conf
+                          </span>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </div>
               </div>

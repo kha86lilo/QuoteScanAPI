@@ -527,3 +527,275 @@ export const getStaffQuoteReplies = asyncHandler(async (req: Request, res: Respo
     },
   });
 });
+
+// =====================================================
+// Internal Functions (callable without req/res)
+// =====================================================
+
+interface ExtractRepliesInternalOptions {
+  senderNames?: string[];
+  startDate?: string | null;
+}
+
+interface ExtractRepliesInternalResult {
+  conversationsFound: number;
+  repliesFetched: number;
+  repliesSaved: number;
+}
+
+/**
+ * Internal version of extractReplies for direct calls
+ */
+export async function extractRepliesInternal(
+  options: ExtractRepliesInternalOptions = {}
+): Promise<ExtractRepliesInternalResult> {
+  const { senderNames = STAFF_SENDER_NAMES, startDate = null } = options;
+
+  // Step 1: Get all conversation IDs from shipping_emails
+  console.log(`[extractRepliesInternal] Searching for conversations, filtering by senders: ${senderNames.join(', ')}${startDate ? `, startDate: ${startDate}` : ''}`);
+  const conversationIds = await getConversationIds(startDate);
+
+  if (conversationIds.length === 0) {
+    return {
+      conversationsFound: 0,
+      repliesFetched: 0,
+      repliesSaved: 0,
+    };
+  }
+
+  console.log(`[extractRepliesInternal] Found ${conversationIds.length} conversations`);
+
+  // Step 2: Fetch emails from Microsoft Graph for these conversations
+  const emails = await microsoftGraphService.fetchEmailsByConversationIds({
+    conversationIds,
+    senderNames,
+  });
+
+  console.log(`[extractRepliesInternal] Fetched ${emails.length} emails from staff members`);
+
+  if (emails.length === 0) {
+    return {
+      conversationsFound: conversationIds.length,
+      repliesFetched: 0,
+      repliesSaved: 0,
+    };
+  }
+
+  // Step 3: Transform emails to StaffReply format and save
+  const staffReplies: StaffReply[] = [];
+
+  for (const email of emails) {
+    const originalEmailId = email.conversationId
+      ? await getOriginalEmailIdByConversation(email.conversationId)
+      : null;
+
+    staffReplies.push({
+      email_message_id: email.id,
+      conversation_id: email.conversationId || '',
+      original_email_id: originalEmailId ?? undefined,
+      sender_name: email.from?.emailAddress?.name,
+      sender_email: email.from?.emailAddress?.address,
+      subject: email.subject,
+      body_preview: email.bodyPreview,
+      received_date: email.receivedDateTime,
+      has_attachments: email.hasAttachments,
+    });
+  }
+
+  // Step 4: Save to database
+  const savedReplies = await saveStaffRepliesBulk(staffReplies);
+
+  return {
+    conversationsFound: conversationIds.length,
+    repliesFetched: emails.length,
+    repliesSaved: savedReplies.length,
+  };
+}
+
+interface ProcessStaffQuotesInternalOptions {
+  maxReplies?: number;
+  reprocessAll?: boolean;
+}
+
+interface ProcessStaffQuotesInternalResult {
+  processed: number;
+  pricingEmails: number;
+  nonPricingEmails: number;
+  failed: number;
+  errors: { replyId: number; subject?: string; error: string }[];
+}
+
+/**
+ * Internal version of processStaffQuotes for direct calls
+ */
+export async function processStaffQuotesInternal(
+  options: ProcessStaffQuotesInternalOptions = {}
+): Promise<ProcessStaffQuotesInternalResult> {
+  const { maxReplies = 1000, reprocessAll = false } = options;
+
+  const aiService = getAIService();
+
+  console.log('\n' + '='.repeat(60));
+  console.log('[processStaffQuotesInternal] PROCESSING STAFF REPLIES FOR PRICING INFORMATION');
+  console.log('='.repeat(60) + '\n');
+
+  // Step 1: Get unprocessed staff replies
+  const staffReplies = await getUnprocessedStaffReplies(maxReplies);
+
+  if (staffReplies.length === 0) {
+    return {
+      processed: 0,
+      pricingEmails: 0,
+      nonPricingEmails: 0,
+      failed: 0,
+      errors: [],
+    };
+  }
+
+  console.log(`[processStaffQuotesInternal] Found ${staffReplies.length} staff replies to process`);
+
+  const results: ProcessStaffQuotesInternalResult = {
+    processed: 0,
+    pricingEmails: 0,
+    nonPricingEmails: 0,
+    failed: 0,
+    errors: [],
+  };
+
+  // Step 2: Process each staff reply
+  for (let i = 0; i < staffReplies.length; i++) {
+    const staffReply = staffReplies[i];
+    if (!staffReply || !staffReply.reply_id) continue;
+
+    const subject = (staffReply.subject || 'No Subject').substring(0, 50);
+    console.log(`[${i + 1}/${staffReplies.length}] Processing: ${subject}...`);
+
+    try {
+      // Check if already processed (unless reprocessAll is true)
+      if (!reprocessAll) {
+        const exists = await checkStaffQuoteReplyExists(staffReply.reply_id);
+        if (exists) {
+          console.log(`  Already processed, skipping`);
+          continue;
+        }
+      }
+
+      // Fetch full email body from Microsoft Graph
+      let emailBody = staffReply.body_preview || '';
+      let attachmentText = '';
+
+      try {
+        // Fetch the full email with body
+        const token = await microsoftGraphService.default.getAccessToken();
+        const response = await fetch(
+          `https://graph.microsoft.com/v1.0/users/${process.env.MS_USER_EMAIL}/messages/${staffReply.email_message_id}?$select=body`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (response.ok) {
+          const emailData = (await response.json()) as {
+            body?: { content?: string; contentType?: string };
+          };
+          if (emailData.body?.content) {
+            emailBody = emailData.body.content;
+            // Strip HTML if needed
+            if (emailData.body.contentType === 'html') {
+              emailBody = emailBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+            }
+          }
+        }
+      } catch (fetchError) {
+        console.log(`  Warning: Could not fetch full email body, using preview`);
+      }
+
+      // Fetch attachments if the email has them
+      if (staffReply.has_attachments) {
+        try {
+          console.log(`  Fetching attachments...`);
+          const attachmentResults = await attachmentProcessor.processEmailAttachments(
+            staffReply.email_message_id
+          );
+          if (attachmentResults.extractedText) {
+            attachmentText = attachmentResults.extractedText;
+            console.log(`  Extracted ${attachmentText.length} chars from attachments`);
+          }
+        } catch (attachError) {
+          const err = attachError as Error;
+          console.log(`  Warning: Could not process attachments: ${err.message}`);
+        }
+      }
+
+      // Step 3: Use AI to analyze email for pricing
+      const pricingResult = await aiService.parsePricingReply(emailBody, attachmentText);
+
+      if (!pricingResult) {
+        console.log(`  Failed to parse with AI`);
+        results.failed++;
+        results.errors.push({
+          replyId: staffReply.reply_id,
+          subject: staffReply.subject,
+          error: 'AI parsing failed',
+        });
+        continue;
+      }
+
+      // Step 4: Get original email ID and related quote IDs
+      const originalEmailId = staffReply.original_email_id ?? null;
+      let relatedQuoteIds: number[] | null = null;
+
+      if (originalEmailId) {
+        try {
+          relatedQuoteIds = await getQuoteIdsByEmailId(originalEmailId);
+          if (relatedQuoteIds.length > 0) {
+            console.log(`  Found ${relatedQuoteIds.length} related quote(s) from original email`);
+          }
+        } catch (quoteErr) {
+          console.log(`  Warning: Could not fetch related quote IDs`);
+        }
+      }
+
+      // Step 5: Save result to database (handles multiple quotes)
+      await saveStaffQuoteReply(
+        staffReply.reply_id,
+        pricingResult,
+        originalEmailId,
+        relatedQuoteIds,
+        emailBody,
+        attachmentText || null
+      );
+
+      results.processed++;
+      if (pricingResult.is_pricing_email) {
+        const quotesCount = pricingResult.quotes?.length || (pricingResult.pricing_data ? 1 : 0);
+        results.pricingEmails++;
+        const firstQuote = pricingResult.quotes?.[0] || pricingResult.pricing_data;
+        console.log(`  ✓ Pricing email detected (confidence: ${pricingResult.confidence_score}, quotes: ${quotesCount}, price: $${firstQuote?.quoted_price || 'N/A'})`);
+      } else {
+        results.nonPricingEmails++;
+        console.log(`  ✗ Not a pricing email (confidence: ${pricingResult.confidence_score})`);
+      }
+    } catch (error) {
+      const err = error as Error;
+      console.error(`  Error processing reply:`, err.message);
+      results.failed++;
+      results.errors.push({
+        replyId: staffReply.reply_id,
+        subject: staffReply.subject,
+        error: err.message,
+      });
+    }
+  }
+
+  console.log('\n' + '='.repeat(60));
+  console.log('[processStaffQuotesInternal] PROCESSING COMPLETE');
+  console.log('='.repeat(60));
+  console.log(`Total processed: ${results.processed}`);
+  console.log(`Pricing emails: ${results.pricingEmails}`);
+  console.log(`Non-pricing emails: ${results.nonPricingEmails}`);
+  console.log(`Failed: ${results.failed}`);
+  console.log('='.repeat(60) + '\n');
+
+  return results;
+}
