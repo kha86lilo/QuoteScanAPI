@@ -111,6 +111,24 @@ export interface PaginatedEmailsResponse {
   activeServiceFilter: string[];
 }
 
+// Thread email type from MS Graph API
+export interface ThreadEmail {
+  id: string;
+  conversationId: string;
+  subject: string;
+  senderName: string;
+  senderEmail: string;
+  receivedDateTime: string;
+  bodyPreview: string;
+  hasAttachments: boolean;
+}
+
+export interface EmailThreadResponse {
+  conversationId: string;
+  emails: ThreadEmail[];
+  count: number;
+}
+
 // Dashboard Types
 export interface DashboardPricingReply {
   staff_quote_reply_id: number;

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { ShippingEmail, EmailWithQuotes, PaginatedEmailsResponse } from '@/types';
+import { ShippingEmail, EmailWithQuotes, PaginatedEmailsResponse, ThreadEmail, EmailThreadResponse } from '@/types';
 import EmailList from '@/components/EmailList';
 import EmailDetails from '@/components/EmailDetails';
 import { Mail, RefreshCw, LayoutDashboard, Filter, X, Search } from 'lucide-react';
@@ -13,8 +13,10 @@ export default function Home() {
   const [emails, setEmails] = useState<ShippingEmail[]>([]);
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<EmailWithQuotes | null>(null);
+  const [emailThread, setEmailThread] = useState<ThreadEmail[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(true);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({
     currentPage: 1,
@@ -51,6 +53,21 @@ export default function Home() {
     }
   }, [selectedServices]);
 
+  const fetchEmailThread = useCallback(async (conversationId: string) => {
+    setIsLoadingThread(true);
+    try {
+      const response = await fetch(`/api/emails/thread/${encodeURIComponent(conversationId)}`);
+      if (!response.ok) throw new Error('Failed to fetch email thread');
+      const data: EmailThreadResponse = await response.json();
+      setEmailThread(data.emails);
+    } catch (err) {
+      console.error('Error fetching email thread:', err);
+      setEmailThread([]);
+    } finally {
+      setIsLoadingThread(false);
+    }
+  }, []);
+
   const fetchEmailDetails = useCallback(async (emailId: number) => {
     setIsLoadingDetails(true);
     try {
@@ -58,13 +75,21 @@ export default function Home() {
       if (!response.ok) throw new Error('Failed to fetch email details');
       const data = await response.json();
       setSelectedEmail(data);
+
+      // Fetch thread if email has a conversation_id
+      if (data.conversation_id) {
+        fetchEmailThread(data.conversation_id);
+      } else {
+        setEmailThread([]);
+      }
     } catch (err) {
       console.error('Error fetching email details:', err);
       setSelectedEmail(null);
+      setEmailThread([]);
     } finally {
       setIsLoadingDetails(false);
     }
-  }, []);
+  }, [fetchEmailThread]);
 
   useEffect(() => {
     fetchEmails(1);
@@ -75,6 +100,7 @@ export default function Home() {
       fetchEmailDetails(selectedEmailId);
     } else {
       setSelectedEmail(null);
+      setEmailThread([]);
     }
   }, [selectedEmailId, fetchEmailDetails]);
 
@@ -322,6 +348,8 @@ export default function Home() {
           <EmailDetails
             email={selectedEmail}
             isLoading={isLoadingDetails}
+            emailThread={emailThread}
+            isLoadingThread={isLoadingThread}
             onFeedbackSubmit={handleFeedbackSubmit}
           />
         </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { EmailWithQuotes, QuoteWithMatches } from '@/types';
+import { EmailWithQuotes, QuoteWithMatches, ThreadEmail } from '@/types';
 import {
   Mail,
   Calendar,
@@ -13,6 +13,9 @@ import {
   AlertTriangle,
   FileDown,
   Info,
+  MessageSquare,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import Attachments from './Attachments';
@@ -22,6 +25,8 @@ import FeedbackDialog from './FeedbackDialog';
 interface EmailDetailsProps {
   email: EmailWithQuotes | null;
   isLoading: boolean;
+  emailThread: ThreadEmail[];
+  isLoadingThread: boolean;
   onFeedbackSubmit: (
     quoteId: number,
     data: {
@@ -45,7 +50,17 @@ function formatFullDate(dateString: string): string {
   });
 }
 
-export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: EmailDetailsProps) {
+function formatShortDate(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+export default function EmailDetails({ email, isLoading, emailThread, isLoadingThread, onFeedbackSubmit }: EmailDetailsProps) {
   const [showMatchesDialog, setShowMatchesDialog] = useState(false);
   const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
   const [showPriceReasoningDialog, setShowPriceReasoningDialog] = useState(false);
@@ -53,6 +68,7 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
   const [selectedQuote, setSelectedQuote] = useState<QuoteWithMatches | null>(null);
   const [selectedQuoteIdForFeedback, setSelectedQuoteIdForFeedback] = useState<number | null>(null);
   const [selectedSuggestedPrice, setSelectedSuggestedPrice] = useState<number | null>(null);
+  const [isThreadExpanded, setIsThreadExpanded] = useState(true);
 
   const handleViewMatches = (quote: QuoteWithMatches) => {
     setSelectedQuote(quote);
@@ -481,6 +497,99 @@ export default function EmailDetails({ email, isLoading, onFeedbackSubmit }: Ema
           </div>
         </div>
       </div>
+
+      {/* Email Thread Section - Outlook Style */}
+      {emailThread.length > 1 && (
+        <div className="border-b border-outlook-border">
+          <button
+            onClick={() => setIsThreadExpanded(!isThreadExpanded)}
+            className="flex items-center gap-2 px-6 py-3 text-sm font-medium text-outlook-text hover:bg-gray-50 transition-colors w-full bg-gray-50 border-b border-outlook-border"
+          >
+            {isThreadExpanded ? (
+              <ChevronDown className="w-4 h-4" />
+            ) : (
+              <ChevronRight className="w-4 h-4" />
+            )}
+            <MessageSquare className="w-4 h-4 text-outlook-blue" />
+            <span>Conversation</span>
+            <span className="text-outlook-textLight font-normal">
+              ({emailThread.length} messages)
+            </span>
+          </button>
+
+          {isThreadExpanded && (
+            <div className="divide-y divide-outlook-border">
+              {isLoadingThread ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-outlook-blue"></div>
+                  <span className="ml-2 text-sm text-outlook-textLight">Loading conversation...</span>
+                </div>
+              ) : (
+                emailThread.map((threadEmail, index) => {
+                  const isCurrentEmail = threadEmail.id === email.email_message_id;
+                  return (
+                    <div
+                      key={threadEmail.id}
+                      className={`px-6 py-4 ${isCurrentEmail ? 'bg-blue-50/50' : 'bg-white'}`}
+                    >
+                      {/* Email Header */}
+                      <div className="flex items-start gap-3 mb-3">
+                        <div
+                          className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium ${
+                            isCurrentEmail
+                              ? 'bg-outlook-blue text-white'
+                              : 'bg-gray-300 text-gray-700'
+                          }`}
+                        >
+                          {threadEmail.senderName?.charAt(0)?.toUpperCase() || 'U'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-outlook-text">
+                                {threadEmail.senderName || 'Unknown Sender'}
+                              </span>
+                              {isCurrentEmail && (
+                                <span className="px-2 py-0.5 bg-outlook-blue text-white text-xs rounded-full">
+                                  Current
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-outlook-textLight whitespace-nowrap">
+                              {formatShortDate(threadEmail.receivedDateTime)}
+                            </span>
+                          </div>
+                          <div className="text-sm text-outlook-textLight">
+                            {threadEmail.senderEmail}
+                          </div>
+                          {threadEmail.hasAttachments && (
+                            <div className="flex items-center gap-1 mt-1 text-xs text-outlook-textLight">
+                              <Paperclip className="w-3 h-3" />
+                              <span>Has attachments</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Email Body Preview */}
+                      <div className="pl-13 ml-10">
+                        <p className="text-sm text-outlook-text whitespace-pre-wrap leading-relaxed">
+                          {threadEmail.bodyPreview || 'No content available'}
+                        </p>
+                      </div>
+
+                      {/* Separator line for visual clarity between emails */}
+                      {index < emailThread.length - 1 && (
+                        <div className="mt-4 border-b border-dashed border-gray-200" />
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Email Body Preview */}
       <div className="px-6 py-4 border-b border-outlook-border">
