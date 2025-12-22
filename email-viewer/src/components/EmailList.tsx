@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { ShippingEmail } from '@/types';
-import { Mail, Paperclip, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
+import { Mail, Paperclip, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, MessageSquare } from 'lucide-react';
 
 interface PaginationInfo {
   currentPage: number;
@@ -41,7 +41,6 @@ interface EmailThread {
 
 export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagination, onPageChange }: EmailListProps) {
   const showPagination = pagination && pagination.totalPages > 1 && onPageChange;
-  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
 
   // Group emails by conversation_id
   const threads = useMemo(() => {
@@ -74,77 +73,6 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
     );
   }, [emails]);
 
-  const toggleThread = (conversationId: string) => {
-    setExpandedThreads(prev => {
-      const next = new Set(prev);
-      if (next.has(conversationId)) {
-        next.delete(conversationId);
-      } else {
-        next.add(conversationId);
-      }
-      return next;
-    });
-  };
-
-  const renderEmailItem = (email: ShippingEmail, isThreadChild: boolean = false) => (
-    <div
-      key={email.email_id}
-      onClick={() => onSelectEmail(email.email_id)}
-      className={`px-4 py-3 cursor-pointer transition-colors ${
-        selectedEmailId === email.email_id
-          ? 'bg-outlook-lightBlue border-l-2 border-l-outlook-blue'
-          : 'hover:bg-outlook-hover'
-      } ${isThreadChild ? 'pl-10 bg-gray-50/50' : ''}`}
-    >
-      <div className="flex items-start gap-3">
-        <div className={`flex-shrink-0 ${isThreadChild ? 'w-6 h-6' : 'w-8 h-8'} rounded-full bg-outlook-blue flex items-center justify-center`}>
-          <span className={`text-white ${isThreadChild ? 'text-[10px]' : 'text-xs'} font-medium`}>
-            {email.email_sender_name?.charAt(0)?.toUpperCase() || 'U'}
-          </span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-1">
-            <span className={`${isThreadChild ? 'text-xs' : 'text-sm'} font-medium text-outlook-text truncate`}>
-              {email.email_sender_name || 'Unknown Sender'}
-            </span>
-            <span className="text-xs text-outlook-textLight flex-shrink-0 ml-2">
-              {formatDate(email.email_received_date)}
-            </span>
-          </div>
-          {!isThreadChild && (
-            <div className="flex items-center gap-1 mb-1">
-              <span className="text-sm text-outlook-text truncate font-medium">
-                {email.email_subject || '(No Subject)'}
-              </span>
-              {email.email_has_attachments && (
-                <Paperclip className="w-3 h-3 text-outlook-textLight flex-shrink-0" />
-              )}
-            </div>
-          )}
-          <p className="text-xs text-outlook-textLight truncate">
-            {email.email_body_preview || 'No preview available'}
-          </p>
-          <div className="mt-1 flex items-center gap-2 flex-wrap">
-            {(email as any).quote_count > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                {(email as any).quote_count} quote{(email as any).quote_count > 1 ? 's' : ''}
-              </span>
-            )}
-            {email.ai_confidence_score !== null && email.ai_confidence_score !== undefined && (
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                email.ai_confidence_score >= 0.8 ? 'bg-green-100 text-green-800' :
-                email.ai_confidence_score >= 0.5 ? 'bg-yellow-100 text-yellow-800' :
-                'bg-red-100 text-red-800'
-              }`}>
-                {Math.round(email.ai_confidence_score * 100)}% conf
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <div className="h-full flex flex-col bg-white">
       <div className="flex-shrink-0 bg-white border-b border-outlook-border px-4 py-3 z-10">
@@ -156,7 +84,6 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
       <div className="flex-1 overflow-y-auto divide-y divide-outlook-border">
         {threads.map((thread) => {
           const isMultiEmail = thread.emails.length > 1;
-          const isExpanded = thread.conversationId ? expandedThreads.has(thread.conversationId) : false;
           const threadContainsSelected = thread.emails.some(e => e.email_id === selectedEmailId);
 
           return (
@@ -164,17 +91,11 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
               {/* Thread header / Single email */}
               <div
                 className={`px-4 py-3 cursor-pointer transition-colors ${
-                  threadContainsSelected && !isExpanded
+                  threadContainsSelected
                     ? 'bg-outlook-lightBlue border-l-2 border-l-outlook-blue'
                     : 'hover:bg-outlook-hover'
                 }`}
-                onClick={() => {
-                  if (isMultiEmail && thread.conversationId) {
-                    toggleThread(thread.conversationId);
-                  } else {
-                    onSelectEmail(thread.latestEmail.email_id);
-                  }
-                }}
+                onClick={() => onSelectEmail(thread.latestEmail.email_id)}
               >
                 <div className="flex items-start gap-3">
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-outlook-blue flex items-center justify-center">
@@ -197,9 +118,6 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
                         <span className="text-xs text-outlook-textLight">
                           {formatDate(thread.latestEmail.email_received_date)}
                         </span>
-                        {isMultiEmail && (
-                          isExpanded ? <ChevronUp className="w-4 h-4 text-outlook-textLight" /> : <ChevronDown className="w-4 h-4 text-outlook-textLight" />
-                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 mb-1">
@@ -227,9 +145,10 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
                       {(() => {
                         const confidenceScores = thread.emails
                           .map(e => e.ai_confidence_score)
-                          .filter((score): score is number => score !== null && score !== undefined);
+                          .filter((score): score is number => score !== null && score !== undefined && !isNaN(score));
                         if (confidenceScores.length === 0) return null;
                         const avgConfidence = confidenceScores.reduce((sum, s) => sum + s, 0) / confidenceScores.length;
+                        if (isNaN(avgConfidence)) return null;
                         return (
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                             avgConfidence >= 0.8 ? 'bg-green-100 text-green-800' :
@@ -245,12 +164,6 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, pagi
                 </div>
               </div>
 
-              {/* Expanded thread emails */}
-              {isMultiEmail && isExpanded && (
-                <div className="border-l-2 border-l-outlook-border ml-4">
-                  {thread.emails.map((email) => renderEmailItem(email, true))}
-                </div>
-              )}
             </div>
           );
         })}
