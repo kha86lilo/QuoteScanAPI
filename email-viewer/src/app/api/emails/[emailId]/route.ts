@@ -36,10 +36,11 @@ export async function GET(
     }
 
     // Get quotes for this email with their matches and AI pricing recommendations
+    // Using LEFT JOIN to include quotes even without AI pricing recommendations
     const quotesResult = await client.query(
       `SELECT
         q.*,
-        -- AI Pricing Recommendations
+        -- AI Pricing Recommendations (may be null if not yet processed)
         apr.id as ai_price_id,
         apr.ai_recommended_price,
         apr.ai_reasoning,
@@ -93,7 +94,7 @@ export async function GET(
           WHERE m.source_quote_id = q.quote_id AND m.suggested_price IS NOT NULL
         ) as avg_suggested_price
       FROM shipping_quotes q
-      INNER JOIN ai_pricing_recommendations apr ON apr.quote_id = q.quote_id
+      LEFT JOIN ai_pricing_recommendations apr ON apr.quote_id = q.quote_id
       WHERE q.email_id = $1
       ORDER BY q.created_at`,
       [emailId]

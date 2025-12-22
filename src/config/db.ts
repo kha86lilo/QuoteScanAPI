@@ -1904,6 +1904,31 @@ async function getStaffQuoteRepliesByOriginalEmailId(
   }
 }
 
+/**
+ * Get staff quote replies by related quote ID
+ * Returns all staff replies that have pricing data for a specific shipping quote
+ */
+async function getStaffQuoteRepliesByQuoteId(
+  quoteId: number
+): Promise<StaffQuoteReply[]> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT sqr.*, sr.email_message_id, sr.conversation_id, sr.sender_name,
+              sr.sender_email, sr.subject, sr.received_date, sr.body_preview
+       FROM staff_quotes_replies sqr
+       INNER JOIN staff_replies sr ON sqr.staff_reply_id = sr.reply_id
+       WHERE sqr.related_quote_id = $1
+       ORDER BY sr.received_date DESC`,
+      [quoteId]
+    );
+
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
 // =====================================================
 // AI Pricing Recommendations Functions
 // =====================================================
@@ -2029,6 +2054,7 @@ export {
   checkStaffQuoteReplyExists,
   getUnprocessedStaffReplies,
   getStaffQuoteRepliesByOriginalEmailId,
+  getStaffQuoteRepliesByQuoteId,
   getQuoteIdsByEmailId,
 };
 

@@ -19,6 +19,7 @@ import {
   getAllStaffQuoteReplies,
   checkStaffQuoteReplyExists,
   getQuoteIdsByEmailId,
+  getStaffQuoteRepliesByQuoteId,
 } from '../config/db.js';
 import { getAIService } from '../services/ai/aiServiceFactory.js';
 import attachmentProcessor from '../services/attachmentProcessor.js';
@@ -525,6 +526,28 @@ export const getStaffQuoteReplies = asyncHandler(async (req: Request, res: Respo
       total: totalCount,
       hasMore: offset + replies.length < totalCount,
     },
+  });
+});
+
+/**
+ * Get staff quote replies for a specific quote ID
+ * GET /api/emails/quotes/:quoteId/replies
+ * Returns all staff replies that contain pricing information for the given quote
+ */
+export const getQuoteReplies = asyncHandler(async (req: Request, res: Response) => {
+  const quoteId = parseInt(req.params.quoteId);
+
+  if (isNaN(quoteId)) {
+    throw new ValidationError('Invalid quote ID');
+  }
+
+  const replies = await getStaffQuoteRepliesByQuoteId(quoteId);
+
+  res.json({
+    success: true,
+    quoteId,
+    data: replies,
+    count: replies.length,
   });
 });
 

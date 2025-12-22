@@ -12,7 +12,6 @@ import {
   ThumbsDown,
   AlertTriangle,
   FileDown,
-  Info,
   MessageSquare,
   ChevronDown,
   ChevronRight,
@@ -63,8 +62,7 @@ function formatShortDate(dateString: string): string {
 export default function EmailDetails({ email, isLoading, emailThread, isLoadingThread, onFeedbackSubmit }: EmailDetailsProps) {
   const [showMatchesDialog, setShowMatchesDialog] = useState(false);
   const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
-  const [showPriceReasoningDialog, setShowPriceReasoningDialog] = useState(false);
-  const [feedbackRating, setFeedbackRating] = useState<1 | -1>(1);
+    const [feedbackRating, setFeedbackRating] = useState<1 | -1>(1);
   const [selectedQuote, setSelectedQuote] = useState<QuoteWithMatches | null>(null);
   const [selectedQuoteIdForFeedback, setSelectedQuoteIdForFeedback] = useState<number | null>(null);
   const [selectedSuggestedPrice, setSelectedSuggestedPrice] = useState<number | null>(null);
@@ -118,145 +116,7 @@ export default function EmailDetails({ email, isLoading, emailThread, isLoadingT
     });
   };
 
-  // Price reasoning dialog component
-  const PriceReasoningDialog = ({
-    quote,
-    isOpen,
-    onClose,
-  }: {
-    quote: QuoteWithMatches;
-    isOpen: boolean;
-    onClose: () => void;
-  }) => {
-    if (!isOpen) return null;
-
-    const confidencePct = quote.ai_confidence_percentage ?? 0;
-    const confidenceColor =
-      confidencePct >= 80
-        ? 'text-green-700'
-        : confidencePct >= 60
-          ? 'text-yellow-700'
-          : 'text-red-700';
-
-    const confidenceBg =
-      confidencePct >= 80
-        ? 'bg-green-100'
-        : confidencePct >= 60
-          ? 'bg-yellow-100'
-          : 'bg-red-100';
-
-    return (
-      <div
-        className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-        onClick={onClose}
-      >
-        <div
-          className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Header */}
-          <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="bg-white/20 rounded-lg p-2">
-                  <Info className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white">AI Price Recommendation</h3>
-                  <p className="text-blue-100 text-sm">Quote #{quote.quote_id}</p>
-                </div>
-              </div>
-              <button
-                onClick={onClose}
-                className="text-white/80 hover:text-white hover:bg-white/20 rounded-lg p-1.5 transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Content */}
-          <div className="p-6 space-y-5">
-            {/* Recommended Price */}
-            <div className="text-center py-4 bg-blue-50 rounded-xl">
-              <p className="text-sm text-blue-600 font-medium mb-1">Recommended Price</p>
-              <p className="text-3xl font-bold text-blue-700">
-                {formatPrice(quote.ai_recommended_price)}
-              </p>
-              {quote.ai_confidence_percentage !== null && (
-                <span
-                  className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold ${confidenceBg} ${confidenceColor}`}
-                >
-                  {quote.ai_confidence_percentage}% Confidence
-                </span>
-              )}
-            </div>
-
-            {/* Price Range */}
-            {(quote.floor_price || quote.ceiling_price || quote.target_price) && (
-              <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                  Price Range
-                </p>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="text-center p-3 bg-white rounded-lg border border-gray-200">
-                    <p className="text-xs text-gray-500 mb-1">Floor</p>
-                    <p className="text-lg font-semibold text-green-600">
-                      {formatPrice(quote.floor_price)}
-                    </p>
-                  </div>
-                  <div className="text-center p-3 bg-white rounded-lg border-2 border-blue-200">
-                    <p className="text-xs text-gray-500 mb-1">Target</p>
-                    <p className="text-lg font-semibold text-blue-600">
-                      {formatPrice(quote.target_price)}
-                    </p>
-                  </div>
-                  <div className="text-center p-3 bg-white rounded-lg border border-gray-200">
-                    <p className="text-xs text-gray-500 mb-1">Ceiling</p>
-                    <p className="text-lg font-semibold text-amber-600">
-                      {formatPrice(quote.ceiling_price)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Reasoning */}
-            {quote.ai_reasoning && (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                  AI Reasoning
-                </p>
-                <div className="bg-gray-50 rounded-xl p-4 max-h-48 overflow-y-auto">
-                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-                    {quote.ai_reasoning}
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div className="px-6 py-4 bg-gray-50 border-t border-gray-100">
-            <button
-              onClick={onClose}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
+  
   const exportProforma = (quote: QuoteWithMatches) => {
     const suggestedPrice = quote.ai_recommended_price;
     const today = new Date().toLocaleDateString('en-US', {
@@ -498,6 +358,234 @@ export default function EmailDetails({ email, isLoading, emailThread, isLoadingT
         </div>
       </div>
 
+      {/* Quotes Section - Moved to top */}
+      <div className="px-6 py-4 border-b border-outlook-border">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-outlook-text flex items-center gap-2">
+            <Building className="w-5 h-5 text-outlook-blue" />
+            Potential Quotes
+          </h2>
+          <span className="text-sm text-outlook-textLight">
+            {email.quotes?.length || 0} quote{(email.quotes?.length || 0) !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {email.quotes && email.quotes.length > 0 ? (
+          <div className="overflow-x-auto border border-outlook-border rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-outlook-border">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text hidden">ID</th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Client</th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Origin</th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">
+                    Destination
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Cargo</th>
+                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Service</th>
+                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">
+                    AI Price
+                  </th>
+                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-outlook-border">
+                {email.quotes.map((quote) => {
+                  const targetPrice = quote.target_price;
+                  const hasTargetPrice = targetPrice !== null;
+                  const confidencePct = quote.ai_confidence_percentage ?? 0;
+                  const confidenceColor =
+                    confidencePct >= 80
+                      ? 'text-green-700'
+                      : confidencePct >= 60
+                        ? 'text-yellow-700'
+                        : 'text-red-700';
+                  const confidenceBg =
+                    confidencePct >= 80
+                      ? 'bg-green-100'
+                      : confidencePct >= 60
+                        ? 'bg-yellow-100'
+                        : 'bg-red-100';
+                  return (
+                    <>
+                      <tr key={quote.quote_id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-outlook-text font-medium hidden">
+                          #{quote.quote_id}
+                        </td>
+                        <td className="px-3 py-2">
+                          {quote.quote_status && (
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                quote.quote_status === 'Approved'
+                                  ? 'bg-green-100 text-green-800'
+                                  : quote.quote_status === 'Pending'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : quote.quote_status === 'Rejected'
+                                      ? 'bg-red-100 text-red-800'
+                                      : 'bg-gray-100 text-gray-800'
+                              }`}
+                            >
+                              {quote.quote_status}
+                            </span>
+                          )}
+                          {quote.hazardous_material && (
+                            <span title="Hazardous Material">
+                              <AlertTriangle className="w-4 h-4 text-amber-500 inline ml-1" />
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-outlook-text">
+                          {quote.client_company_name || '-'}
+                        </td>
+                        <td className="px-3 py-2 text-outlook-text">
+                          {formatLocation(
+                            quote.origin_city,
+                            quote.origin_state_province,
+                            quote.origin_country
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-outlook-text">
+                          {formatLocation(
+                            quote.destination_city,
+                            quote.destination_state_province,
+                            quote.destination_country
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-outlook-text">
+                          {quote.cargo_description || '-'}
+                          {quote.cargo_weight && (
+                            <span className="text-outlook-textLight text-xs ml-1">
+                              ({quote.cargo_weight} {quote.weight_unit || 'kg'})
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-outlook-text">{quote.service_type || '-'}</td>
+                        <td className="px-3 py-2 text-center">
+                          {targetPrice ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm">
+                              {formatPrice(targetPrice)}
+                            </span>
+                          ) : (
+                            <span className="text-outlook-textLight">-</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => exportProforma(quote)}
+                              className="p-1 hover:bg-outlook-hover rounded transition-colors"
+                              title="Export Proforma"
+                            >
+                              <FileDown className="w-4 h-4 text-outlook-blue" />
+                            </button>
+                            {quote.matches && quote.matches.length > 0 && (
+                              <button
+                                onClick={() => handleViewMatches(quote)}
+                                className="p-1 hover:bg-outlook-hover rounded transition-colors"
+                                title={`View Matches (${quote.matches.length})`}
+                              >
+                                <Eye className="w-4 h-4 text-outlook-blue" />
+                              </button>
+                            )}
+
+                            <button
+                              onClick={() => handleThumbsUp(quote)}
+                              className="p-1 hover:bg-green-50 rounded transition-colors"
+                              title="Good suggestion"
+                            >
+                              <ThumbsUp className="w-4 h-4 text-green-600" />
+                            </button>
+                            <button
+                              onClick={() => handleThumbsDown(quote)}
+                              className="p-1 hover:bg-red-50 rounded transition-colors"
+                              title="Poor suggestion"
+                            >
+                              <ThumbsDown className="w-4 h-4 text-red-600" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {/* AI Price Recommendation Row - Always visible */}
+                      {hasTargetPrice && (
+                        <tr key={`${quote.quote_id}-expanded`} className="bg-blue-50/50">
+                          <td colSpan={9} className="px-4 py-3">
+                            <div className="flex flex-wrap gap-6 items-start">
+                              {/* Target Price */}
+                              <div className="flex-shrink-0">
+                                <p className="text-xs text-blue-600 font-medium mb-1">Target Price</p>
+                                <p className="text-2xl font-bold text-blue-700">
+                                  {formatPrice(targetPrice)}
+                                </p>
+                                {quote.ai_confidence_percentage !== null && (
+                                  <span
+                                    className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-semibold ${confidenceBg} ${confidenceColor}`}
+                                  >
+                                    {quote.ai_confidence_percentage}% Confidence
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Price Range */}
+                              {(quote.floor_price || quote.ceiling_price || quote.ai_recommended_price) && (
+                                <div className="flex-shrink-0">
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                                    Price Range
+                                  </p>
+                                  <div className="flex gap-3">
+                                    <div className="text-center px-3 py-2 bg-white rounded-lg border border-gray-200">
+                                      <p className="text-xs text-gray-500">Floor</p>
+                                      <p className="text-sm font-semibold text-green-600">
+                                        {formatPrice(quote.floor_price)}
+                                      </p>
+                                    </div>
+                                    {quote.ai_recommended_price !== null && (
+                                      <div className="text-center px-3 py-2 bg-white rounded-lg border-2 border-purple-200">
+                                        <p className="text-xs text-gray-500">Recommended</p>
+                                        <p className="text-sm font-semibold text-purple-600">
+                                          {formatPrice(quote.ai_recommended_price)}
+                                        </p>
+                                      </div>
+                                    )}
+                                    <div className="text-center px-3 py-2 bg-white rounded-lg border border-gray-200">
+                                      <p className="text-xs text-gray-500">Ceiling</p>
+                                      <p className="text-sm font-semibold text-amber-600">
+                                        {formatPrice(quote.ceiling_price)}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Reasoning */}
+                              {quote.ai_reasoning && (
+                                <div className="flex-1 min-w-[200px]">
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                                    AI Reasoning
+                                  </p>
+                                  <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap bg-white rounded-lg p-3 border border-gray-200 max-h-32 overflow-y-auto">
+                                    {quote.ai_reasoning}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-8 bg-gray-50 rounded-lg">
+            <Building className="w-12 h-12 text-outlook-border mx-auto mb-3" />
+            <p className="text-sm text-outlook-textLight">No quotes extracted from this email</p>
+          </div>
+        )}
+      </div>
+
       {/* Email Thread Section - Outlook Style */}
       {emailThread.length > 1 && (
         <div className="border-b border-outlook-border">
@@ -611,160 +699,6 @@ export default function EmailDetails({ email, isLoading, emailThread, isLoadingT
       {/* Attachments Section */}
       <Attachments emailId={email.email_id} hasAttachments={email.email_has_attachments} />
 
-      {/* Quotes Section */}
-      <div className="px-6 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-outlook-text flex items-center gap-2">
-            <Building className="w-5 h-5 text-outlook-blue" />
-            Potential Quotes
-          </h2>
-          <span className="text-sm text-outlook-textLight">
-            {email.quotes?.length || 0} quote{(email.quotes?.length || 0) !== 1 ? 's' : ''}
-          </span>
-        </div>
-
-        {email.quotes && email.quotes.length > 0 ? (
-          <div className="overflow-x-auto border border-outlook-border rounded-lg">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-outlook-border">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text hidden">ID</th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Status</th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Client</th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Origin</th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">
-                    Destination
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Cargo</th>
-                  <th className="px-3 py-2 text-left font-semibold text-outlook-text">Service</th>
-                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">
-                    AI Price
-                  </th>
-                  <th className="px-3 py-2 text-center font-semibold text-outlook-text">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-outlook-border">
-                {email.quotes.map((quote) => {
-                  const suggestedPrice = quote.ai_recommended_price;
-                  const topMatch = quote.matches?.[0];
-                  return (
-                    <tr key={quote.quote_id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 text-outlook-text font-medium hidden">
-                        #{quote.quote_id}
-                      </td>
-                      <td className="px-3 py-2">
-                        {quote.quote_status && (
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs font-medium ${
-                              quote.quote_status === 'Approved'
-                                ? 'bg-green-100 text-green-800'
-                                : quote.quote_status === 'Pending'
-                                  ? 'bg-yellow-100 text-yellow-800'
-                                  : quote.quote_status === 'Rejected'
-                                    ? 'bg-red-100 text-red-800'
-                                    : 'bg-gray-100 text-gray-800'
-                            }`}
-                          >
-                            {quote.quote_status}
-                          </span>
-                        )}
-                        {quote.hazardous_material && (
-                          <span title="Hazardous Material">
-                            <AlertTriangle className="w-4 h-4 text-amber-500 inline ml-1" />
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-outlook-text">
-                        {quote.client_company_name || '-'}
-                      </td>
-                      <td className="px-3 py-2 text-outlook-text">
-                        {formatLocation(
-                          quote.origin_city,
-                          quote.origin_state_province,
-                          quote.origin_country
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-outlook-text">
-                        {formatLocation(
-                          quote.destination_city,
-                          quote.destination_state_province,
-                          quote.destination_country
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-outlook-text">
-                        {quote.cargo_description || '-'}
-                        {quote.cargo_weight && (
-                          <span className="text-outlook-textLight text-xs ml-1">
-                            ({quote.cargo_weight} {quote.weight_unit || 'kg'})
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-outlook-text">{quote.service_type || '-'}</td>
-                      <td className="px-3 py-2 text-center">
-                        {suggestedPrice ? (
-                          <button
-                            onClick={() => {
-                              setSelectedQuote(quote);
-                              setShowPriceReasoningDialog(true);
-                            }}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold text-sm hover:bg-blue-200 transition-colors cursor-pointer"
-                          >
-                            {formatPrice(suggestedPrice)}
-                            {quote.ai_reasoning && <Info className="w-3.5 h-3.5 text-blue-500" />}
-                          </button>
-                        ) : (
-                          <span className="text-outlook-textLight">-</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            onClick={() => exportProforma(quote)}
-                            className="p-1 hover:bg-outlook-hover rounded transition-colors"
-                            title="Export Proforma"
-                          >
-                            <FileDown className="w-4 h-4 text-outlook-blue" />
-                          </button>
-                          {quote.matches && quote.matches.length > 0 && (
-                            <button
-                              onClick={() => handleViewMatches(quote)}
-                              className="p-1 hover:bg-outlook-hover rounded transition-colors"
-                              title={`View Matches (${quote.matches.length})`}
-                            >
-                              <Eye className="w-4 h-4 text-outlook-blue" />
-                            </button>
-                          )}
-
-                          <button
-                            onClick={() => handleThumbsUp(quote)}
-                            className="p-1 hover:bg-green-50 rounded transition-colors"
-                            title="Good suggestion"
-                          >
-                            <ThumbsUp className="w-4 h-4 text-green-600" />
-                          </button>
-                          <button
-                            onClick={() => handleThumbsDown(quote)}
-                            className="p-1 hover:bg-red-50 rounded transition-colors"
-                            title="Poor suggestion"
-                          >
-                            <ThumbsDown className="w-4 h-4 text-red-600" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-center py-8 bg-gray-50 rounded-lg">
-            <Building className="w-12 h-12 text-outlook-border mx-auto mb-3" />
-            <p className="text-sm text-outlook-textLight">No quotes extracted from this email</p>
-          </div>
-        )}
-      </div>
-
       {/* Dialogs */}
       {selectedQuote && (
         <MatchesDialog
@@ -789,16 +723,6 @@ export default function EmailDetails({ email, isLoading, emailThread, isLoadingT
           suggestedPrice={selectedSuggestedPrice}
           rating={feedbackRating}
           onSubmit={handleFeedbackSubmit}
-        />
-      )}
-
-      {selectedQuote && (
-        <PriceReasoningDialog
-          quote={selectedQuote}
-          isOpen={showPriceReasoningDialog}
-          onClose={() => {
-            setShowPriceReasoningDialog(false);
-          }}
         />
       )}
 

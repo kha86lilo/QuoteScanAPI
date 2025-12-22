@@ -72,4 +72,11 @@ router.post('/process-staff-quotes', emailProcessingLimiter, emailController.pro
  */
 router.get('/staff-quote-replies', generalApiLimiter, emailController.getStaffQuoteReplies);
 
+/**
+ * Get staff quote replies for a specific quote
+ * GET /api/emails/quotes/:quoteId/replies
+ * Returns all staff replies with pricing info for the given quote
+ */
+router.get('/quotes/:quoteId/replies', generalApiLimiter, emailController.getQuoteReplies);
+
 export default router;
