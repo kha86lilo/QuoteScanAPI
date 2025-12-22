@@ -1287,6 +1287,7 @@ async function getFeedbackForHistoricalQuotes(quoteIds: number[]): Promise<Map<n
 
 /**
  * Get quote IDs where email was received after a specific date
+ * Excludes quotes that already have feedback or priced staff quote replies
  */
 async function getQuoteIdsByStartDate(startDate: string, limit = 1000): Promise<number[]> {
   const client = await pool.connect();
@@ -1296,6 +1297,20 @@ async function getQuoteIdsByStartDate(startDate: string, limit = 1000): Promise<
        FROM shipping_quotes q
        INNER JOIN shipping_emails e ON q.email_id = e.email_id
        WHERE e.email_received_date >= $1
+         -- Exclude quotes that have feedback
+         AND NOT EXISTS (
+           SELECT 1 FROM ai_pricing_recommendations apr
+           INNER JOIN quote_ai_price_feedback f ON f.ai_price_id = apr.id
+           WHERE apr.quote_id = q.quote_id
+         )
+         -- Exclude quotes from emails that have priced staff quote replies
+         AND NOT EXISTS (
+           SELECT 1 FROM staff_replies sr
+           INNER JOIN staff_quotes_replies sqr ON sqr.staff_reply_id = sr.reply_id
+           WHERE sr.original_email_id = e.email_id
+           AND sqr.is_pricing_email = true
+           AND sqr.quoted_price IS NOT NULL
+         )
        ORDER BY e.email_received_date ASC
        LIMIT $2`,
       [startDate, limit]
@@ -1344,7 +1359,8 @@ async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
         q.quote_status,
         q.quote_date,
         q.created_at,
-        e.email_sender_email
+        e.email_sender_email,
+        e.email_id
       FROM shipping_quotes q
       LEFT JOIN shipping_emails e ON q.email_id = e.email_id
       WHERE q.quote_id = $1`,
@@ -1372,6 +1388,36 @@ async function getQuoteForMatching(quoteId: number): Promise<Quote | null> {
     )) {
       console.log(`  Quote ${quoteId} skipped: sender "${quote.email_sender_email}" is ignored`);
       return null;
+    }
+
+    // Check if quote already has feedback
+    const feedbackCheck = await client.query(
+      `SELECT 1 FROM ai_pricing_recommendations apr
+       INNER JOIN quote_ai_price_feedback f ON f.ai_price_id = apr.id
+       WHERE apr.quote_id = $1
+       LIMIT 1`,
+      [quoteId]
+    );
+    if (feedbackCheck.rows.length > 0) {
+      console.log(`  Quote ${quoteId} skipped: already has feedback`);
+      return null;
+    }
+
+    // Check if email has priced staff quote reply
+    if (quote.email_id) {
+      const pricedStaffQuoteCheck = await client.query(
+        `SELECT 1 FROM staff_replies sr
+         INNER JOIN staff_quotes_replies sqr ON sqr.staff_reply_id = sr.reply_id
+         WHERE sr.original_email_id = $1
+         AND sqr.is_pricing_email = true
+         AND sqr.quoted_price IS NOT NULL
+         LIMIT 1`,
+        [quote.email_id]
+      );
+      if (pricedStaffQuoteCheck.rows.length > 0) {
+        console.log(`  Quote ${quoteId} skipped: email has priced staff quote reply`);
+        return null;
+      }
     }
 
     return quote;
